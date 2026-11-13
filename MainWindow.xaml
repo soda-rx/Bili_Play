@@ -77,9 +77,10 @@
                 </Grid>
             </TitleBar.Content>
             <TitleBar.RightHeader>
-                <Button x:Name="AccountButton" Width="40" Height="40" Padding="4" CornerRadius="20" Margin="0"
+                <!-- Keep the avatar inside the layout-reserved header area: a render transform
+                     would shift it into the system caption buttons without layout knowing. -->
+                <Button x:Name="AccountButton" Width="40" Height="40" Padding="4" CornerRadius="20" Margin="0,0,8,0"
                     Style="{StaticResource SubtleButtonStyle}" TitleBar.IsDragRegion="False" ToolTipService.ToolTip="账号" AutomationProperties.Name="账号">
-                    <Button.RenderTransform><TranslateTransform X="8"/></Button.RenderTransform>
                     <PersonPicture Width="28" Height="28" ProfilePicture="{x:Bind ViewModel.AccountAvatar, Mode=OneWay}" />
                     <Button.Flyout>
                         <Flyout x:Name="AccountFlyout" Placement="BottomEdgeAlignedRight" Opening="AccountFlyoutOpening" Closed="AccountFlyoutClosed">

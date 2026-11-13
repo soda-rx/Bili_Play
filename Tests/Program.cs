@@ -381,6 +381,8 @@ Test("Artwork codec policy prefers WebP only when supported and compatibility mo
    Equal(supported && !forced, ArtworkFormats.UseWebp);
    var cover = Text.CoverImage("https://i0.hdslb.com/cover.jpg",480);
    True(cover.EndsWith(supported && !forced ? "@480w.webp" : "@480w.jpg", StringComparison.Ordinal));
+   // The system media flyout decodes in a shell context, so the SMTC variant always requests jpg.
+   True(Text.CoverImage("https://i0.hdslb.com/cover.jpg",480,false).EndsWith("@480w.jpg", StringComparison.Ordinal));
    Equal(supported && !forced ? webp.AbsoluteUri : "https://i0.hdslb.com/avatar.jpg@80w.png", Text.CompatibleImageUri(webp).AbsoluteUri);
   }
  }
@@ -1130,6 +1132,21 @@ Test("Folder previews update only changed cover properties without replacing the
  var folder=new Folder(71,"收藏夹",3,true,true,Cover:"https://i0.hdslb.com/a.jpg");var changes=new List<string?>();folder.PropertyChanged+=(_,args)=>changes.Add(args.PropertyName);
  var preview=folder with{Cover="https://i0.hdslb.com/b.jpg",CoverMiddle="https://i0.hdslb.com/c.jpg"};folder.ApplyPreview(preview);True(changes.Contains(nameof(Folder.FrontImage)));True(folder.FrontImage.Contains("b.jpg"));
  changes.Clear();folder.ApplyPreview(preview);Equal(0,changes.Count);True(folder.Detail.Contains("私密"));
+});
+Test("Missing folder collage layers render blank slots instead of repeating the front cover",()=>
+{
+ // A folder with fewer than three items only has a front cover; the middle/back artwork is absent.
+ var folder=new Folder(71,"收藏夹",1,true,false,Cover:"https://i0.hdslb.com/a.jpg");
+ True(folder.HasContents);True(folder.FrontImage.Contains("a.jpg"));
+ // Missing layers must resolve to no image (a blank card slot), never the front cover again.
+ Equal("",folder.MiddleImage);Equal("",folder.BackImage);
+ True(folder.MiddleImage!=folder.FrontImage);True(folder.BackImage!=folder.FrontImage);
+ // A preview that also lacks the middle/back layers keeps those slots blank rather than stacking the front cover.
+ folder.ApplyPreview(folder with{Count=1});
+ Equal("",folder.MiddleImage);Equal("",folder.BackImage);True(folder.FrontImage.Contains("a.jpg"));
+ // Present layers still render their own covers, so the fix must not blank real artwork.
+ var full=new Folder(72,"收藏夹",3,true,false,Cover:"https://i0.hdslb.com/a.jpg",CoverMiddle:"https://i0.hdslb.com/b.jpg",CoverBack:"https://i0.hdslb.com/c.jpg");
+ True(full.MiddleImage.Contains("b.jpg"));True(full.BackImage.Contains("c.jpg"));True(full.MiddleImage!=full.FrontImage);
 });
 Test("Notification excerpts are bounded and thumbnail visibility uses explicit booleans",()=>
 {

@@ -50,6 +50,24 @@ public sealed partial class MainWindow
             throw new InvalidOperationException("封面背景没有覆盖标题栏、正文和播放栏的完整窗口");
     }
 
+    internal void VerifyTitleBarHeaderSpacing()
+    {
+        Grid? layout = null;
+        void Walk(DependencyObject node)
+        {
+            if (layout is not null) return;
+            if (node is Grid { Name: "PART_LayoutRoot" } grid) { layout = grid; return; }
+            for (var i = 0; i < VisualTreeHelper.GetChildrenCount(node); i++) Walk(VisualTreeHelper.GetChild(node, i));
+        }
+        Walk(AppTitleBar);
+        // The template's last column reserves the system caption button width (AppWindow.TitleBar.RightInset).
+        var reserved = layout is { ColumnDefinitions.Count: > 0 } ? layout.ColumnDefinitions[layout.ColumnDefinitions.Count - 1].ActualWidth : 0;
+        if (reserved <= 0) throw new InvalidOperationException("标题栏没有为系统最小化/最大化/关闭按钮预留宽度");
+        var accountRight = AccountButton.TransformToVisual(WindowRoot).TransformPoint(new(AccountButton.ActualWidth, 0)).X;
+        var captionLeft = WindowRoot.ActualWidth - reserved;
+        if (accountRight > captionLeft + .5) throw new InvalidOperationException($"账号按钮侵入系统标题栏按钮区域 {accountRight - captionLeft:F1}px");
+    }
+
     internal async Task VerifySocialListsAsync()
     {
         await RefreshSocialCountsAsync(_ => Task.FromResult((1234L, 56789L)));

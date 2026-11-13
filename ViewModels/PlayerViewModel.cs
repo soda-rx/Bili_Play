@@ -731,7 +731,11 @@ public partial class PlayerViewModel : ObservableObject, IDisposable
             : _view == "space" && SpaceProfile is { } profile ? await Client.GetUserWorksAsync(profile.Id, next, _browse?.Token ?? default)
             : await Client.SearchAsync(_query, next, _browse?.Token ?? default);
         if (version != _browseVersion) return;
-        _page = next; Append(Tracks, result.Items); HasMore = result.HasMore;
+        _page = next;
+        // A repeated page adds nothing new; the server's has_more cannot be trusted past
+        // that point, so stop paging instead of re-requesting the same content forever.
+        var added = Append(Tracks, result.Items);
+        HasMore = result.HasMore && added > 0;
         if (_view == "search")
         {
             var ranked = PreferredUploaders.RankSearch(Tracks, _query);
@@ -1378,10 +1382,21 @@ public partial class PlayerViewModel : ObservableObject, IDisposable
     }
     private static void Replace<T>(ObservableCollection<T> target, IEnumerable<T> source)
     { target.Clear(); foreach (var item in source) target.Add(item); }
-    private void Append(ObservableCollection<Track> target, IEnumerable<Track> source)
+    private int Append(ObservableCollection<Track> target, IEnumerable<Track> source)
     {
-        foreach (var track in source) target.Add(Client.Account is { } account ? Store.ApplyMetadata(account.Id, track) : track);
+        // Paged endpoints can repeat content (fav lists clamp an out-of-range page to
+        // the last one while still claiming has_more), so a repeat must never add twice.
+        var known = new HashSet<(string Bvid, int Page)>(target.Select(TrackKey));
+        var added = 0;
+        foreach (var track in source)
+        {
+            if (!known.Add(TrackKey(track))) continue;
+            target.Add(Client.Account is { } account ? Store.ApplyMetadata(account.Id, track) : track);
+            added++;
+        }
+        return added;
     }
+    private static (string Bvid, int Page) TrackKey(Track track) => (!string.IsNullOrEmpty(track.Bvid) ? track.Bvid : "aid:" + track.Aid, track.Page);
     public void Dispose()
     {
         if (_disposed) return;

@@ -40,8 +40,11 @@ public sealed record Folder(long Id, string Title, int Count, bool Owned, bool I
     public string Detail => $"{_preview?.Count ?? Count} 个视频 · {(Owned ? (_preview?.IsPrivate ?? IsPrivate) ? "私密" : "公开" : "订阅 · 只读")}";
     public bool HasContents => (_preview?.Count ?? Count) > 0;
     public string FrontImage => HasContents ? Thumbnail(_preview?.Cover ?? Cover) : "";
-    public string MiddleImage => Thumbnail(string.IsNullOrEmpty(_preview?.CoverMiddle ?? CoverMiddle) ? _preview?.Cover ?? Cover : _preview?.CoverMiddle ?? CoverMiddle);
-    public string BackImage => Thumbnail(string.IsNullOrEmpty(_preview?.CoverBack ?? CoverBack) ? _preview?.Cover ?? Cover : _preview?.CoverBack ?? CoverBack);
+    // Missing collage layers render as blank card slots (the Border's neutral brush)
+    // instead of repeating the front cover: a folder with fewer than three items must
+    // not show the same cover stacked three times.
+    public string MiddleImage => Thumbnail(_preview?.CoverMiddle ?? CoverMiddle);
+    public string BackImage => Thumbnail(_preview?.CoverBack ?? CoverBack);
     public void RefreshImages()
     {
         foreach (var name in new[] { nameof(FrontImage), nameof(MiddleImage), nameof(BackImage) })
@@ -97,12 +100,12 @@ public static partial class Text
     [GeneratedRegex(@"^BV[0-9A-Za-z]{10}$", RegexOptions.IgnoreCase)]
     private static partial Regex BvidPattern();
 
-    public static string CoverImage(string value, int width)
+    public static string CoverImage(string value, int width, bool webp = true)
     {
         if (string.IsNullOrWhiteSpace(value)) return "";
         if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || !IsImageCdn(uri)) return value;
         // Let the view crop from the original center, independent of the chosen codec.
-        var format = ArtworkFormats.UseWebp ? "webp" : "jpg";
+        var format = webp && ArtworkFormats.UseWebp ? "webp" : "jpg";
         return new UriBuilder(uri) { Path = uri.AbsolutePath.Split('@')[0] + $"@{width}w.{format}" }.Uri.AbsoluteUri;
     }
     public static Uri CompatibleImageUri(Uri uri)

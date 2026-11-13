@@ -10,7 +10,7 @@
   <Identity
     Name="sodarx.BiliPlay"
     Publisher="CN=43D94D0E-79B6-4582-B52D-D4AE86E09E83"
-    Version="1.0.0.0" />
+    Version="1.0.1.0" />
 
   <Properties>
     <DisplayName>Bili Play</DisplayName>

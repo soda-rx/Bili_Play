@@ -157,6 +157,7 @@ internal sealed class PlaybackEngine : IDisposable
     public event Action<bool>? PlaybackRequested;
     public event Action<string>? Failed;
     private readonly SystemMediaTransportControls _controls;
+    private readonly MediaArtworkSession _mediaArtwork = new();
 
     public PlaybackEngine(BilibiliClient client, DispatcherQueue dispatcher)
     {
@@ -216,16 +217,19 @@ internal sealed class PlaybackEngine : IDisposable
     public void PrepareSystemSession(Track? track)
     {
         if (Current is not null) return;
+        _mediaArtwork.Reset();
         _controls.IsEnabled = true; _controls.IsPlayEnabled = track is not null;
         _controls.IsPauseEnabled = track is not null; _controls.IsNextEnabled = track is not null; _controls.IsPreviousEnabled = track is not null;
         var updater = _controls.DisplayUpdater; updater.Type = MediaPlaybackType.Music;
         updater.MusicProperties.Title = track?.Title ?? "Bili Play";
         updater.MusicProperties.Artist = track?.Uploader ?? "";
-        updater.Thumbnail = MediaThumbnail(track);
+        updater.Thumbnail = null;
         updater.Update(); _controls.PlaybackStatus = MediaPlaybackStatus.Paused;
+        _ = ApplyThumbnailAsync(track);
     }
     public async Task PlayAsync(Track track, double startPosition = 0)
     {
+        _mediaArtwork.Reset();
         CancelQualitySwitch();
         _load?.Cancel(); _load?.Dispose();
         var load = _load = new();
@@ -248,14 +252,34 @@ internal sealed class PlaybackEngine : IDisposable
         updater.Type = MediaPlaybackType.Music;
         updater.MusicProperties.Title = track.Title;
         updater.MusicProperties.Artist = track.Uploader;
-        updater.Thumbnail = MediaThumbnail(track);
+        updater.Thumbnail = null;
         updater.Update();
         if (_pauseRequested) _player.Pause(); else _player.Play();
         Changed?.Invoke();
+        _ = ApplyThumbnailAsync(track);
     }
-    private static RandomAccessStreamReference? MediaThumbnail(Track? track) =>
-        track is not null && Uri.TryCreate(Text.CoverImage(track.Cover, 256), UriKind.Absolute, out var cover)
-            ? RandomAccessStreamReference.CreateFromUri(Text.CompatibleImageUri(cover)) : null;
+    private Task ApplyThumbnailAsync(Track? track) => _mediaArtwork.UpdateAsync(track, value => ResolveThumbnailAsync(value), thumbnail =>
+    {
+        if (_disposed) return;
+        _controls.DisplayUpdater.Thumbnail = thumbnail; _controls.DisplayUpdater.Update();
+    });
+    internal static async Task<RandomAccessStreamReference?> ResolveThumbnailAsync(Track track, Func<Uri,Task<Uri>>? resolve = null)
+    {
+        // The media flyout fetches remote URIs in a shell context and fails silently, so hand it
+        // the artwork from the local disk cache and keep the SMTC variant on the plain jpg codec.
+        if (!Uri.TryCreate(Text.CoverImage(track.Cover, 256, webp: false), UriKind.Absolute, out var cover)) return null;
+        // Remote metadata must never direct the shell to arbitrary local files or UNC shares.
+        if (cover.IsFile && (cover.IsUnc || !App.IsVisualCheck && !DebugSession.IsActive)) return null;
+        if (!cover.IsFile && !Text.IsMediaHost(cover)) return null;
+        try
+        {
+            var resolved = await (resolve is null ? ArtworkCache.ResolveUriAsync(cover) : resolve(cover));
+            if (!resolved.IsFile) return null;
+            var file = await Windows.Storage.StorageFile.GetFileFromPathAsync(resolved.LocalPath);
+            return RandomAccessStreamReference.CreateFromFile(file);
+        }
+        catch (Exception) { return null; }
+    }
     private async Task RetryPageAsync()
     {
         if (Current is not { LocalFile.Length: 0 } track || _pageRetried || _load is null)
@@ -295,6 +319,7 @@ internal sealed class PlaybackEngine : IDisposable
     }
     public void Stop()
     {
+        _mediaArtwork.Reset();
         CancelQualitySwitch();
         _load?.Cancel(); _proxy.Clear(); _player.Pause(); _player.Source = null;
         _item?.Source.Dispose(); _item = null; _stream = null; _availableStream = null; Current = null;
@@ -304,6 +329,6 @@ internal sealed class PlaybackEngine : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        Stop(); _controls.IsEnabled = false; _load?.Dispose(); _audio.Dispose();
+        Stop(); _mediaArtwork.Dispose(); _controls.IsEnabled = false; _load?.Dispose(); _audio.Dispose();
     }
 }

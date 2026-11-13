@@ -17,3 +17,5 @@
 
 - Git 与发布命名规范：Tag 名不带 v（例如 0.8.1）；附注 Tag 的注释带 v（例如 Bili Play v0.8.1）；GitHub Release 标题带 v（例如 Bili Play v0.8.1）；项目版本号不带 v（例如 0.8.1，包清单按四段格式 0.8.1.0）。以后用户要求 Git 提交、打标签或发布时遵循此规范；命名偏好本身不代表立即创建提交、Tag 或 Release。
 - 每次版本交付或提交版本标签后，直接在对话中提供按“新增、修复、改进”分类的 Release 更新说明，描述相对上一个已发布标签的实际变化；撰写说明不代表自动创建或发布 GitHub Release。
+
+- 版本及发布校验遵循 RELEASING.md 与 release-policy.json：纯 SemVer 附注标签；按实际变更递增，预发布使用 alpha/beta/rc.N；GitHub 附件 Bili_Play_<完整版本>.zip，内容仍仅既有 MSIX 和公开证书。历史标签、Release、安装身份和已发版本不得为格式统一而改写；无确认不创建 Release 或上传安装包。Windows 预发布安装链路需另行设计，不冒充已支持。

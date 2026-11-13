@@ -2,6 +2,10 @@
 param([string]$OutputDirectory)
 $ErrorActionPreference = 'Stop'
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+& python -B (Join-Path $PSScriptRoot 'check_release.py')
+if ($LASTEXITCODE -ne 0) { throw '版本预检未通过。' }
+[xml]$releaseProject = Get-Content -LiteralPath (Join-Path $root 'BiliPlay.csproj') -Raw
+if ($releaseProject.SelectSingleNode('/Project/PropertyGroup/Version').InnerText.Contains('-')) { throw '预发布安装链路尚未配置，请先规划预览渠道及升级版本，不能当作正式版打包。' }
 [xml]$sourceManifest = Get-Content -LiteralPath (Join-Path $root 'Package.appxmanifest') -Raw
 $version = ([Version]$sourceManifest.Package.Identity.Version).ToString(3)
 $publisher = [string]$sourceManifest.Package.Identity.Publisher

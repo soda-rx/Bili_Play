@@ -85,3 +85,8 @@ session.txt
 *.subtitles.json
 
 # Portable Properties/PublishProfiles/*.pubxml files belong in source control.
+
+# Python release checks (run with -B to avoid bytecode)
+__pycache__/
+*.py[cod]
+Bili_Play_*.zip

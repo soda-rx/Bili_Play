@@ -90,3 +90,5 @@ session.txt
 __pycache__/
 *.py[cod]
 Bili_Play_*.zip
+# Legacy installer archive name
+Bili.Play.zip

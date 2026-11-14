@@ -19,3 +19,5 @@
 - 每次版本交付或提交版本标签后，直接在对话中提供按“新增、修复、改进”分类的 Release 更新说明，描述相对上一个已发布标签的实际变化；撰写说明不代表自动创建或发布 GitHub Release。
 
 - 版本及发布校验遵循 RELEASING.md 与 release-policy.json：纯 SemVer 附注标签；按实际变更递增，预发布使用 alpha/beta/rc.N；GitHub 附件 Bili_Play_<完整版本>.zip，内容仍仅既有 MSIX 和公开证书。历史标签、Release、安装身份和已发版本不得为格式统一而改写；无确认不创建 Release 或上传安装包。Windows 预发布安装链路需另行设计，不冒充已支持。
+
+- 已有 GitHub Release Notes 和贡献者署名由用户维护，不因版本管理统一而修改、重排、补写或纠正；仅在用户之后明确要求时才更改。用户另行要求撰写新版本更新说明时，仍遵循原有分类约定。

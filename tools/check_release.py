@@ -102,17 +102,18 @@ def check_android_code(root, version, code):
         require(code > max(codes), "新版本 versionCode 必须大于所有已标记版本（预发布也要递增）")
 
 
-def check_tag(root, tag, current, product):
+def check_tag(root, tag, current, product, *, require_head=True):
     parse_version(tag)
     require(tag == current, "Tag 与程序版本不一致")
     ref = "refs/tags/" + tag
     require(git(root, "cat-file", "-t", ref) == "tag", "必须使用 Annotated Tag，不能是 Lightweight Tag")
     subject = git(root, "for-each-ref", "--format=%(contents:subject)", ref)
     require(subject == product + " v" + tag, "Tag 注释不符合平台命名规范")
-    require(git(root, "rev-parse", ref + "^{commit}") == git(root, "rev-parse", "HEAD"),
-            "请检出该 Tag 的提交再执行发布校验")
-    require(not git(root, "status", "--porcelain", "--untracked-files=all"),
-            "发布前工作区必须干净；不能给未提交内容打包发布")
+    if require_head:
+        require(git(root, "rev-parse", ref + "^{commit}") == git(root, "rev-parse", "HEAD"),
+                "请检出该 Tag 的提交再执行发布校验")
+        require(not git(root, "status", "--porcelain", "--untracked-files=all"),
+                "发布前工作区必须干净；不能给未提交内容打包发布")
 
 
 def check_notes(body):
@@ -142,13 +143,14 @@ def asset_name(data, version):
     return data["assetPrefix"] + "_" + version + data["extension"]
 
 
-def check_release(data, release, version):
+def check_release(data, release, version, *, validate_notes=True):
     require(release["tag_name"] == version, "Release Tag 与源码版本不一致")
     require(release["name"] == data["product"] + " v" + version, "Release 标题不符合规范")
     expected = parse_version(version).group(4) is not None
     require(type(release["prerelease"]) is bool and release["prerelease"] == expected,
             "Release 的 Pre-release 状态与版本后缀不一致")
-    check_notes(release.get("body") or "")
+    if validate_notes:
+        check_notes(release.get("body") or "")
     names = [item["name"] for item in release.get("assets", [])]
     require(names == [asset_name(data, version)], "Release 应仅包含一个名称正确且包含完整版本号的发布附件")
 
@@ -195,34 +197,73 @@ def check_asset(path, data, version, code, aapt=None):
     # hashes, signature and privacy checks remain in Build-Installer.ps1.
 
 
+def audit_history(root, data, tag=None, release=None):
+    """Inspect tag snapshots using today's tool, without checking out or executing them."""
+    tags = [tag] if tag else git(root, "tag", "--list").splitlines()
+    require(tags, "没有可审计的版本标签")
+    records = []
+    for name in tags:
+        parse_version(name)  # Never accept an arbitrary Git revision from CLI/event input.
+        ref = "refs/tags/" + name
+        version, code = source_version(root, data["platform"], ref)
+        check_tag(root, name, version, data["product"], require_head=False)
+        if release is not None:
+            # Existing Release Notes and contributor wording are user-maintained.
+            check_release(data, release, version, validate_notes=False)
+        records.append(dict(tag=name, version=version, code=code,
+                            commit=git(root, "rev-parse", ref + "^{commit}")))
+    return records
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--tag", help="检查现有标签；工作区必须检出该提交且干净")
-    parser.add_argument("--notes", type=Path, help="发布前检查中文 Markdown 更新日志")
-    parser.add_argument("--asset", type=Path, help="检查本地发布附件（必须同时提供 --tag、--notes）")
+    parser.add_argument("--tag", help="严格检查现有标签；工作区须检出该提交且干净")
+    parser.add_argument("--audit-history", action="store_true",
+                        help="使用当前工具只读审计标签快照；不指定 --tag 时检查全部标签")
+    parser.add_argument("--notes", type=Path, help="可选：检查用户提供的新更新日志")
+    parser.add_argument("--asset", type=Path, help="严格检查本地发布附件（同时提供 --tag、--notes）")
     parser.add_argument("--aapt", type=Path, help="Android SDK aapt 的可信可执行文件路径")
-    parser.add_argument("--release-json", type=Path, help="检查 GitHub Release JSON 或完整事件")
-    parser.add_argument("--ci", action="store_true", help="自动读取 GitHub Actions 事件，不修改远端")
+    parser.add_argument("--release-json", type=Path, help="只读检查 GitHub Release JSON 或完整事件")
+    parser.add_argument("--ci", action="store_true", help="读取 GitHub Actions 事件，不修改远端")
     args = parser.parse_args(argv)
     root = Path(__file__).resolve().parent.parent
     try:
         data = policy(root)
-        version, code = source_version(root, data["platform"])
-        if code is not None:
-            check_android_code(root, version, code)
         payload = None
         event = args.release_json
-        if args.ci and os.environ.get("GITHUB_EVENT_NAME") == "release":
+        event_name = os.environ.get("GITHUB_EVENT_NAME") if args.ci else None
+        if event_name == "release":
             event = Path(os.environ["GITHUB_EVENT_PATH"])
         if event:
             payload = json.loads(event.read_text(encoding="utf-8-sig"))
             payload = payload.get("release", payload)
-            check_release(data, payload, version)
         tag = args.tag or (payload["tag_name"] if payload else None)
         if args.ci:
             tag = tag or os.environ.get("RELEASE_TAG") or None
             if os.environ.get("GITHUB_REF_TYPE") == "tag":
                 tag = tag or os.environ["GITHUB_REF_NAME"]
+
+        historical = args.audit_history or event_name in ("release", "workflow_dispatch")
+        if historical:
+            require(not args.asset and not args.notes,
+                    "历史审计只读取标签和发布元数据；新发布附件验收请使用严格 --tag 模式")
+            if payload:
+                require(tag == payload["tag_name"], "指定的标签与 Release 不一致")
+            records = audit_history(root, data, tag, payload)
+            for record in records:
+                print("PASS historical tag: " + record["tag"] + " -> " + record["commit"]
+                      + (f" (versionCode={record['code']})" if record["code"] else ""))
+            print(f"PASS read-only historical audit: {len(records)} tag(s); "
+                  "no checkout, old-code execution, Release Notes or contributor edits")
+            if payload:
+                print("PASS release metadata / asset names; remote binaries were NOT downloaded or verified")
+            return 0
+
+        version, code = source_version(root, data["platform"])
+        if code is not None:
+            check_android_code(root, version, code)
+        if payload:
+            check_release(data, payload, version)
         if tag:
             check_tag(root, tag, version, data["product"])
         if args.notes:

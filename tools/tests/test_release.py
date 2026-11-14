@@ -168,6 +168,86 @@ class ReleaseChecks(unittest.TestCase):
                 env=environment, capture_output=True, text=True, encoding="utf-8")
             self.assertEqual(expected_code, result.returncode, result.stdout + result.stderr)
 
+    def historical_repo(self):
+        self.repo()
+        self.git("tag", "-a", "1.0.0", "-m", "Bili Play Android v1.0.0")
+        tools = self.root / "tools"
+        tools.mkdir()
+        shutil.copyfile(r.__file__, tools / "check_release.py")
+        (self.root / "release-policy.json").write_text(
+            json.dumps({key: value for key, value in self.android.items() if key != "extension"}),
+            encoding="utf-8")
+        (self.root / "version.properties").write_text("versionName=1.1.0\nversionCode=37\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "Current tool and newer product version")
+
+    def test_history_uses_old_snapshot_without_old_checker(self):
+        self.historical_repo()
+        missing = subprocess.run(
+            ["git", "-C", str(self.root), "cat-file", "-e", "refs/tags/1.0.0:tools/check_release.py"],
+            capture_output=True)
+        self.assertNotEqual(0, missing.returncode)
+        (self.root / "uncommitted.txt").write_text("Synthetic current work")
+        head_before = self.git("rev-parse", "HEAD")
+        changes_before = self.git("status", "--porcelain")
+        record = r.audit_history(self.root, self.android, "1.0.0")[0]
+        self.assertEqual(("1.0.0", 36), (record["version"], record["code"]))
+        self.assertEqual(head_before, self.git("rev-parse", "HEAD"))
+        self.assertEqual(changes_before, self.git("status", "--porcelain"))
+        self.rejects(r.check_tag, self.root, "1.0.0", "1.0.0", "Bili Play Android")
+
+    def test_history_rejects_lightweight_and_version_mismatch(self):
+        self.repo()
+        self.git("tag", "1.0.0")
+        self.rejects(r.audit_history, self.root, self.android, "1.0.0")
+        self.git("tag", "-a", "1.0.1", "-m", "Bili Play Android v1.0.1")
+        self.rejects(r.audit_history, self.root, self.android, "1.0.1")
+        self.rejects(r.audit_history, self.root, self.android, "HEAD")
+
+    def test_history_metadata_does_not_validate_or_modify_user_notes(self):
+        self.historical_repo()
+        body = "作者自定义正文与署名，原样保留。"
+        release = dict(tag_name="1.0.0", name="Bili Play Android v1.0.0", body=body,
+                       prerelease=False, assets=[dict(name="Bili_Play_Android_1.0.0.apk")])
+        original = json.dumps(release, ensure_ascii=False)
+        r.audit_history(self.root, self.android, "1.0.0", release)
+        self.assertEqual(original, json.dumps(release, ensure_ascii=False))
+        self.rejects(r.audit_history, self.root, self.android, "1.0.0",
+                     dict(release, name="Bili Play Android v1.0.1"))
+
+    def test_current_tool_cli_reads_old_release_and_manual_history(self):
+        self.historical_repo()
+        event = self.root / ".git" / "historical-event.json"
+        release = dict(tag_name="1.0.0", name="Bili Play Android v1.0.0", body="原始说明",
+                       prerelease=False, assets=[dict(name="Bili_Play_Android_1.0.0.apk")])
+        event.write_text(json.dumps(dict(release=release)), encoding="utf-8")
+        for event_name, selected in (("release", ""), ("workflow_dispatch", "1.0.0"),
+                                     ("workflow_dispatch", "")):
+            env = dict(os.environ, GITHUB_EVENT_NAME=event_name, GITHUB_EVENT_PATH=str(event),
+                       GITHUB_REF_TYPE="branch", GITHUB_REF_NAME="main",
+                       RELEASE_TAG=selected, PYTHONUTF8="1")
+            process = subprocess.run(
+                [sys.executable, "-B", str(self.root / "tools/check_release.py"), "--ci"],
+                env=env, capture_output=True, text=True, encoding="utf-8")
+            self.assertEqual(0, process.returncode, process.stdout + process.stderr)
+            self.assertIn("PASS historical tag: 1.0.0", process.stdout)
+        process = subprocess.run(
+            [sys.executable, "-B", str(self.root / "tools/check_release.py"),
+             "--audit-history", "--tag", "1.0.0", "--asset", "unused.zip"],
+            capture_output=True, text=True, encoding="utf-8", env=dict(os.environ, PYTHONUTF8="1"))
+        self.assertEqual(1, process.returncode)
+
+    def test_history_never_executes_script_stored_in_old_tag(self):
+        self.repo()
+        tools = self.root / "tools"
+        tools.mkdir()
+        (tools / "check_release.py").write_text("raise AssertionError('must not run old code')\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "Synthetic old tool that must never execute")
+        self.git("tag", "-a", "1.0.0", "-m", "Bili Play Android v1.0.0")
+        records = r.audit_history(self.root, self.android)
+        self.assertEqual(["1.0.0"], [record["tag"] for record in records])
+
 
 if __name__ == "__main__":
     unittest.main()

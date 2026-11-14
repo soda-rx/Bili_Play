@@ -45,11 +45,28 @@ python -B tools/check_release.py --notes <工程外的更新日志.md>
 
 ## GitHub Actions
 
-Release policy 工作流对 main 推送、PR 校验版本来源；对新 Tag 校验附注类型、注释、源码版本和提交；对 Release published/edited 事件额外校验标题、预发布标记、日志和附件名。手动运行可留空只查源码，或指定包含新工具的标签。
+Release policy 工作流对 main 推送、PR 校验当前版本来源；对新 Tag 保留严格的附注、版本及提交检查。Release 事件和手动历史审计均从默认分支取得当前工具，只读读取目标标签中的版本文件，不检出或执行旧版本代码。Release 事件只核对标题、预发布标记和附件名称，不检查或改写已有更新说明、贡献署名。手动运行可指定任一历史标签；留空审计全部标签。
 
 权限仅 contents: read，无签名密钥，不安装软件、不上传附件、不创建/删除/覆盖 Release。CI 不下载或执行远端二进制，不能据此声称远端附件签名、隐私或内部版本已验证。
 
-在 GitHub 网页直接发布时，published/edited 检查在操作之后发生，并非事前阻断，务必先做本地检查。可由管理员把 Release policy 设为分支必需检查；本次未修改保护设置。旧标签没有新工具，不为补工具重写旧提交，也不以新规则失败为由删除旧版本。
+在 GitHub 网页直接发布时，published/edited 检查在操作之后发生，并非事前阻断，务必先做本地检查。可由管理员把 Release policy 设为分支必需检查；本次未修改保护设置。历史审计不依赖旧标签中是否存在新工具，不为补工具重写旧提交。历史审计不充当正式发布验收，不替代本地严格的 --tag / --asset 检查。
+
+## Windows 历史审计入口
+
+以下入口在当前 Windows 仓库可用；本次未改动 Android 工程。
+
+~~~powershell
+# 使用当前工具读取所有标签的版本文件，不修改工作区或标签。
+python -B tools/check_release.py --audit-history
+
+# 只检查一个历史版本，工作区无需切回旧提交。
+python -B tools/check_release.py --audit-history --tag 0.9.5
+
+# 可选：核对导出的 Release 元数据，不检查或更改原有日志和署名。
+python -B tools/check_release.py --audit-history --release-json <工程外的Release元数据.json>
+~~~
+
+历史模式不会运行旧标签中的脚本，不接受本地安装包验收参数；新版本正式验收仍使用原有严格命令，要求检出对应标签提交且工作区干净。未关联 Release 的标签也可以审计，不因此自动补发 Release。
 
 ## Windows 版本来源与打包
 

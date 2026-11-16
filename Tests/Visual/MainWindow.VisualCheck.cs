@@ -15,10 +15,10 @@ public sealed partial class MainWindow
         try
         {
             var area=Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(AppWindow.Id,Microsoft.UI.Windowing.DisplayAreaFallback.Primary).WorkArea;
-            ViewModel.Store.SetSetting("windowPlacement",System.Text.Json.JsonSerializer.Serialize(new Placement(area.X+12,area.Y+12,760,580,false)));
+            ViewModel.Store.SetSetting("windowPlacement",System.Text.Json.JsonSerializer.Serialize(new Placement(area.X+12,area.Y+12,760,580,false),PlacementJsonContext.Default.Placement));
             RestoreWindowPlacement();await Task.Delay(80);
             if(Math.Abs(AppWindow.Size.Width-Math.Min(760,area.Width))>2||Math.Abs(AppWindow.Size.Height-Math.Min(580,area.Height))>2) throw new InvalidOperationException("窗口尺寸恢复错误");
-            ViewModel.Store.SetSetting("windowPlacement",System.Text.Json.JsonSerializer.Serialize(new Placement(-900000,-900000,760,580,false)));
+            ViewModel.Store.SetSetting("windowPlacement",System.Text.Json.JsonSerializer.Serialize(new Placement(-900000,-900000,760,580,false),PlacementJsonContext.Default.Placement));
             RestoreWindowPlacement();await Task.Delay(80);
             var visible=Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(AppWindow.Id,Microsoft.UI.Windowing.DisplayAreaFallback.Primary).WorkArea;
             if(AppWindow.Position.X<visible.X||AppWindow.Position.Y<visible.Y) throw new InvalidOperationException("离屏窗口没有恢复到可见区域");

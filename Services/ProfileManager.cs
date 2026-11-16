@@ -1,8 +1,12 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace BiliPlay.Services;
 
 public sealed record UserProfile(string Id, string Name, long AccountId, string Avatar);
+
+[JsonSerializable(typeof(UserProfile[]))]
+internal partial class ProfileJsonContext : JsonSerializerContext;
 
 public static class ProfileManager
 {
@@ -16,7 +20,7 @@ public static class ProfileManager
     {
         lock (Gate)
         {
-            try { return JsonSerializer.Deserialize<UserProfile[]>(File.Exists(FilePath) ? File.ReadAllText(FilePath) : "[]") ?? []; }
+            try { return JsonSerializer.Deserialize(File.Exists(FilePath) ? File.ReadAllText(FilePath) : "[]", ProfileJsonContext.Default.UserProfileArray) ?? []; }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { return []; }
         }
     }
@@ -54,7 +58,7 @@ public static class ProfileManager
             SaveList(Read().Where(p => p.Id != profile.Id).Append(profile));
         }
     }
-    private static void SaveList(IEnumerable<UserProfile> list) => File.WriteAllText(FilePath, JsonSerializer.Serialize(list.ToArray()));
+    private static void SaveList(IEnumerable<UserProfile> list) => File.WriteAllText(FilePath, JsonSerializer.Serialize(list.ToArray(), ProfileJsonContext.Default.UserProfileArray));
     public static void UpdateAccount(Core.Account account)
     { if (DebugSession.IsActive) return; var digits = account.Id.ToString(); var label = $"UID {digits[..Math.Min(5, digits.Length)]}"; Save(new(AppProfile.ProfileId, label, account.Id, account.Avatar)); ClearPending(); }
 }

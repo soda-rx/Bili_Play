@@ -45,17 +45,17 @@ public sealed class LocalStore : IDisposable
     }
     public IReadOnlyList<Track> MusicCache(long account)
     {
-        try { return JsonSerializer.Deserialize<Track[]>(GetSetting($"musicChannel:{account}", "[]")) ?? []; }
+        try { return JsonSerializer.Deserialize(GetSetting($"musicChannel:{account}", "[]"), BiliPlayJsonContext.Default.TrackArray) ?? []; }
         catch (JsonException) { return []; }
     }
     public void SaveMusicCache(long account, IEnumerable<Track> tracks) =>
-        SetSetting($"musicChannel:{account}", JsonSerializer.Serialize(tracks.Take(120).ToArray()));
+        SetSetting($"musicChannel:{account}", JsonSerializer.Serialize(tracks.Take(120).ToArray(), BiliPlayJsonContext.Default.TrackArray));
     public IReadOnlyList<Track> ReadTracks(string key)
     {
-        try { return JsonSerializer.Deserialize<Track[]>(GetSetting(key, "[]")) ?? []; }
+        try { return JsonSerializer.Deserialize(GetSetting(key, "[]"), BiliPlayJsonContext.Default.TrackArray) ?? []; }
         catch (JsonException) { return []; }
     }
-    public void WriteTracks(string key, IEnumerable<Track> tracks) => SetSetting(key, JsonSerializer.Serialize(tracks.ToArray()));
+    public void WriteTracks(string key, IEnumerable<Track> tracks) => SetSetting(key, JsonSerializer.Serialize(tracks.ToArray(), BiliPlayJsonContext.Default.TrackArray));
     public void DeleteSearch(long account, string query)
     {
         using var c = _db.CreateCommand();
@@ -77,7 +77,7 @@ public sealed class LocalStore : IDisposable
               position=excluded.position, played_at=excluded.played_at
             """;
         c.Parameters.AddWithValue("$account", account); c.Parameters.AddWithValue("$key", track.Key);
-        c.Parameters.AddWithValue("$track", JsonSerializer.Serialize(track)); c.Parameters.AddWithValue("$position", position);
+        c.Parameters.AddWithValue("$track", JsonSerializer.Serialize(track, BiliPlayJsonContext.Default.Track)); c.Parameters.AddWithValue("$position", position);
         c.Parameters.AddWithValue("$time", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
         c.ExecuteNonQuery();
     }
@@ -118,7 +118,7 @@ public sealed class LocalStore : IDisposable
         using var reader = c.ExecuteReader();
         var result = new List<Track>();
         while (reader.Read())
-            try { if (JsonSerializer.Deserialize<Track>(reader.GetString(0)) is { } track) result.Add(ApplyMetadata(account, track)); }
+            try { if (JsonSerializer.Deserialize(reader.GetString(0), BiliPlayJsonContext.Default.Track) is { } track) result.Add(ApplyMetadata(account, track)); }
             catch (JsonException) { }
         return result;
     }
@@ -162,7 +162,7 @@ public static class SessionVault
         {
             var item = new PasswordVault().Retrieve(Resource, Username);
             item.RetrievePassword();
-            return JsonSerializer.Deserialize<SavedCookie[]>(item.Password) ?? [];
+            return JsonSerializer.Deserialize(item.Password, BiliPlayJsonContext.Default.SavedCookieArray) ?? [];
         }
         catch (Exception e) when (e is System.Runtime.InteropServices.COMException or JsonException) { return []; }
     }
@@ -170,7 +170,7 @@ public static class SessionVault
     {
         if(DebugSession.IsActive)return;
         Clear();
-        new PasswordVault().Add(new(Resource, Username, JsonSerializer.Serialize(cookies)));
+        new PasswordVault().Add(new(Resource, Username, JsonSerializer.Serialize(cookies.ToArray(), BiliPlayJsonContext.Default.SavedCookieArray)));
     }
     public static void Clear()
     {

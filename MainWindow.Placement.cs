@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using BiliPlay.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Windowing;
@@ -10,7 +11,9 @@ public sealed partial class MainWindow
 {
     private DispatcherTimer? _placementTimer;
     private RectInt32 _restoredBounds;
-    private sealed record Placement(int X, int Y, int Width, int Height, bool Maximized);
+    internal sealed record Placement(int X, int Y, int Width, int Height, bool Maximized);
+    [JsonSerializable(typeof(Placement))]
+    internal partial class PlacementJsonContext : JsonSerializerContext;
     private void InitializeWindowPlacement()
     {
         if (App.IsVisualCheck) return;
@@ -20,8 +23,17 @@ public sealed partial class MainWindow
         _placementTimer.Tick += (_, _) => { _placementTimer.Stop(); SaveWindowPlacement(); };
         AppWindow.Changed += (_, _) =>
         {
-            if (AppWindow.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Restored })
-                _restoredBounds = new(AppWindow.Position.X, AppWindow.Position.Y, AppWindow.Size.Width, AppWindow.Size.Height);
+            if (AppWindow.Presenter is OverlappedPresenter presenter)
+            {
+                if (presenter.State == OverlappedPresenterState.Restored)
+                    _restoredBounds = new(AppWindow.Position.X, AppWindow.Position.Y, AppWindow.Size.Width, AppWindow.Size.Height);
+                if (presenter.State == OverlappedPresenterState.Minimized)
+                {
+                    ViewModel.SetTrayResidentMode(true);
+                    ScheduleMemoryTrim(200);
+                }
+                else ViewModel.SetTrayResidentMode(false);
+            }
             _placementTimer.Stop(); _placementTimer.Start();
         };
     }
@@ -29,7 +41,7 @@ public sealed partial class MainWindow
     {
         try
         {
-            var saved = JsonSerializer.Deserialize<Placement>(ViewModel.Store.GetSetting("windowPlacement", "null"));
+            var saved = JsonSerializer.Deserialize(ViewModel.Store.GetSetting("windowPlacement", "null"), PlacementJsonContext.Default.Placement);
             if (saved is { X: >= -1000000 and <= 1000000, Y: >= -1000000 and <= 1000000, Width: >= 320 and <= 32768, Height: >= 240 and <= 32768 })
             {
                 var rect = new RectInt32(saved.X, saved.Y, saved.Width, saved.Height);
@@ -49,6 +61,6 @@ public sealed partial class MainWindow
         if (App.IsVisualCheck || DebugSession.IsActive || _restoredBounds.Width <= 0) return;
         var rect = _restoredBounds;
         var maximized = AppWindow.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Maximized };
-        ViewModel.Store.SetSetting("windowPlacement", JsonSerializer.Serialize(new Placement(rect.X, rect.Y, rect.Width, rect.Height, maximized)));
+        ViewModel.Store.SetSetting("windowPlacement", JsonSerializer.Serialize(new Placement(rect.X, rect.Y, rect.Width, rect.Height, maximized), PlacementJsonContext.Default.Placement));
     }
 }

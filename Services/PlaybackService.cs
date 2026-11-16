@@ -21,7 +21,7 @@ public sealed class PlaybackService(BilibiliClient client, DispatcherQueue dispa
     public string Quality => _engine?.Quality ?? "";
     public string SelectedQuality => _engine?.SelectedQuality ?? "";
     public bool IsQualitySwitching => _engine?.IsQualitySwitching == true;
-    public IReadOnlyList<string> Qualities => _engine?.Qualities ?? [];
+    public IReadOnlyList<string> Qualities => _engine?.Qualities ?? Array.Empty<string>();
     public bool HasHiRes => _engine?.HasHiRes == true;
     public void SelectQuality(string quality) => _engine?.SelectQuality(quality);
     public double Volume
@@ -83,7 +83,7 @@ internal sealed class PlaybackEngine : IDisposable
     private bool _pauseRequested;
     public bool HasHiRes => _availableStream?.HasHiRes == true || _availableStream?.Quality.StartsWith("Hi-Res", StringComparison.Ordinal) == true;
     public IReadOnlyList<string> Qualities => _availableStream is { Fallback: not null } audio
-        ? [audio.Fallback.Quality, audio.Quality] : Current is null ? [] : [Quality];
+        ? (string[])[audio.Fallback.Quality, audio.Quality] : Current is null ? Array.Empty<string>() : (string[])[Quality];
     public void SelectQuality(string quality)
     {
         if (quality == _pendingQuality) return;

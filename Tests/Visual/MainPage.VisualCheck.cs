@@ -165,8 +165,24 @@ public sealed partial class MainPage
             ((MainWindow)App.Window).VerifyGlobalBackdrop(false);
             _forceReducedMotion=false;
             for(var volume=0;volume<=100;volume+=10) ViewModel.Volume=volume;
+            ViewModel.Seek(60);
+            Check(ViewModel.PositionText == "1:00", "跳转进度后时间文本未更新");
+            long workingSetBeforeTray, workingSetAfterTray;
+            using (var proc = System.Diagnostics.Process.GetCurrentProcess()) workingSetBeforeTray = proc.WorkingSet64;
+            ViewModel.SetTrayResidentMode(true);
+            Check(ViewModel.IsTrayResident && ViewModel.TimerInterval == TimeSpan.FromMilliseconds(500), "托盘驻留降频模式未生效");
+            ViewModel.Position = 125;
+            Check(ViewModel.PositionText == "1:00", "托盘隐藏期间仍触发了高频 UI 文本格式化");
+            MainWindow.TrimProcessWorkingSet();
+            using (var proc = System.Diagnostics.Process.GetCurrentProcess())
+            {
+                proc.Refresh();
+                workingSetAfterTray = proc.WorkingSet64;
+            }
+            ViewModel.SetTrayResidentMode(false);
+            Check(!ViewModel.IsTrayResident && ViewModel.TimerInterval == TimeSpan.FromMilliseconds(50), "托盘唤醒后未恢复 50ms 刷新周期");
             await VerifyDebugEntryAsync();
-            File.WriteAllText(Path.Combine(directory,"result.json"),JsonSerializer.Serialize(new { Success=true,OfflineDebug=true,LoginLayout=true,Scenes=checks,RapidToggles=12,PlaybackMarkers=true,SearchHistory=true,LyricCueTransitions=true,StartupSubtitles=true,CoverLanding=true,ImmediateSelection=true,QualityDialogs=true,QualitySelectionFeedback=true,LyricHighlight=true,SocialLists=true,LocalFolderOrder=true,CacheSelection=true,NoticeMotion=true,DisabledClearButtons=true,GlobalBackdrop=true,TrackActivation=true,RowCovers=true,InitialLyricHighlight=true,LyricSeparation=true,Comments=true,PlaybackSpeed=true,UniformFooter=true,StableQueue=true,PageEntrances=true,InterruptibleFooter=true,StartupResponsive=true,DownloadedMenu=true,SettingsAbout=true },new JsonSerializerOptions { WriteIndented=true }));
+            File.WriteAllText(Path.Combine(directory,"result.json"),JsonSerializer.Serialize(new { Success=true,OfflineDebug=true,LoginLayout=true,Scenes=checks,RapidToggles=12,PlaybackMarkers=true,SearchHistory=true,LyricCueTransitions=true,StartupSubtitles=true,CoverLanding=true,ImmediateSelection=true,QualityDialogs=true,QualitySelectionFeedback=true,LyricHighlight=true,SocialLists=true,LocalFolderOrder=true,CacheSelection=true,NoticeMotion=true,DisabledClearButtons=true,GlobalBackdrop=true,TrackActivation=true,RowCovers=true,InitialLyricHighlight=true,LyricSeparation=true,Comments=true,PlaybackSpeed=true,UniformFooter=true,StableQueue=true,PageEntrances=true,InterruptibleFooter=true,StartupResponsive=true,DownloadedMenu=true,SettingsAbout=true,TrayWorkingSetBeforeMB=Math.Round(workingSetBeforeTray/1048576.0,2),TrayWorkingSetAfterMB=Math.Round(workingSetAfterTray/1048576.0,2) },new JsonSerializerOptions { WriteIndented=true }));
         }
         catch(Exception error)
         { File.WriteAllText(Path.Combine(directory,"result.json"),JsonSerializer.Serialize(new { Success=false,Error=error.ToString(),Scenes=checks },new JsonSerializerOptions { WriteIndented=true })); }
@@ -205,7 +221,7 @@ public sealed partial class MainPage
             }
             Check(boxes.Count > 1, "收藏夹单元未正确渲染");
             ViewModel.Folders.Move(2,0); ViewModel.SaveFolderOrder();
-            var stored = JsonSerializer.Deserialize<long[]>(ViewModel.Store.GetSetting("folderOrder:123", "[]"));
+            var stored = JsonSerializer.Deserialize(ViewModel.Store.GetSetting("folderOrder:123", "[]"), BiliPlayJsonContext.Default.Int64Array);
             Check(stored!.SequenceEqual(ViewModel.Folders.Select(folder=>folder.Id)), "本地收藏夹顺序未持久化");
         }
         ViewModel.Navigate("history"); ViewModel.Tracks.Clear(); UpdateLayout();
@@ -425,7 +441,7 @@ public sealed partial class MainPage
         foreach (var (track, text) in new[] { (first, "启动即载入的歌词"), (second, "切换后应显示的歌词") })
         {
             // A sidecar is enough: startup loading must never attempt to decode or play this file.
-            File.WriteAllText(Path.ChangeExtension(track.LocalFile, ".subtitles.json"), JsonSerializer.Serialize(new[] { new CachedSubtitle(track == first ? subtitle with { IsAuto = true } : subtitle, new[] { new SubtitleLine(5, 120, text) }) }));
+            File.WriteAllText(Path.ChangeExtension(track.LocalFile, ".subtitles.json"), JsonSerializer.Serialize(new[] { new CachedSubtitle(track == first ? subtitle with { IsAuto = true } : subtitle, new[] { new SubtitleLine(5, 120, text) }) }, SubtitleJsonContext.Default.CachedSubtitleArray));
         }
         ViewModel.Store.WriteTracks("queue:123", new[] { first, second });
         ViewModel.Store.SetSetting("queueCurrent:123", $"{first.Bvid}:{first.Page}");

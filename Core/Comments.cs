@@ -120,7 +120,7 @@ public sealed partial class BilibiliClient
         if (root > 0) { form["root"] = root.ToString(); form["parent"] = parent.ToString(); }
         if (pictures is { Count: > 0 })
         {
-            form["pictures"] = JsonSerializer.Serialize(pictures.Select(picture => picture.ToRequest()));
+            form["pictures"] = JsonSerializer.Serialize(pictures.Select(picture => picture.ToRequest()).ToArray(), InternalCoreJsonContext.Default.CommentPictureRequestArray);
             form["at_name_to_mid"] = "{}"; form["gaia_source"] = "main_web";
         }
         var data = await PostAsync("x/v2/reply/add",form,ct);

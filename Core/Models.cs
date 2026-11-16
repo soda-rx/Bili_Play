@@ -59,7 +59,7 @@ public sealed record Folder(long Id, string Title, int Count, bool Owned, bool I
         for (var i = 0; i < names.Length; i++)
             if (before[i] != after[i]) PropertyChanged?.Invoke(this, new(names[i]));
     }
-    private static string Thumbnail(string image) => string.IsNullOrEmpty(image) ? "" : Text.CoverImage(image, 640);
+    private static string Thumbnail(string image) => string.IsNullOrEmpty(image) ? "" : Text.CoverImage(image, 320);
     public static bool IsPrivateAttribute(long attributes) => (attributes & 1) != 0;
     public override string ToString() => Title;
 }

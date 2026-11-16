@@ -46,7 +46,7 @@ public static class ArtworkCache
             var image=node.Value.Image;Avatars.Remove(node);Avatars.AddFirst((key,image));return image;
         }
         var created=Create(uri,width);Avatars.AddFirst((key,created));
-        if(Avatars.Count>64)Avatars.RemoveLast();
+        if(Avatars.Count>32)Avatars.RemoveLast();
         return created;
     }
     public static async Task WarmAsync(IEnumerable<string> images, CancellationToken ct=default)
@@ -65,7 +65,7 @@ public static class ArtworkCache
         var key=$"{width}:{uri.AbsoluteUri}";
         if(Memory.TryGetValue(key,out var weak)&&weak.TryGetTarget(out var existing))return existing;
         var image=new BitmapImage { DecodePixelWidth=width };Sources.Add(image,uri);
-        if(Memory.Count>=256)Memory.Clear();Memory[key]=new(image);
+        if(Memory.Count>=96)Memory.Clear();Memory[key]=new(image);
         if(uri.Scheme!="https" || App.IsVisualCheck) image.UriSource=uri;
         else _=LoadAsync(image,uri);
         return image;
@@ -77,6 +77,11 @@ public static class ArtworkCache
         if(version!=_formatVersion)return;
         try {image.UriSource=resolved;}
         catch(Exception e) when(e is System.Runtime.InteropServices.COMException or ArgumentException) { }
+    }
+    public static void TrimMemory()
+    {
+        Memory.Clear();
+        while (Avatars.Count > 8) Avatars.RemoveLast();
     }
     public static void ResetScope() { _formatVersion++; Memory.Clear(); Avatars.Clear(); Sources.Clear(); _clearing=Task.CompletedTask; if(Cache.IsValueCreated)Cache.Value.Dispose(); Cache=NewCache(); }
     public static async Task<long> GetSizeAsync()

@@ -1,16 +1,21 @@
 ﻿using System.Text.Json;
+using System.Text.Json.Serialization;
 using BiliPlay.Core;
 
 namespace BiliPlay.Services;
 
 public sealed record CachedSubtitle(SubtitleTrack Track, IReadOnlyList<SubtitleLine> Lines);
+
+[JsonSerializable(typeof(CachedSubtitle[]))]
+internal partial class SubtitleJsonContext : JsonSerializerContext;
+
 public static class SubtitleCache
 {
     private static string FileName(Track track) => Path.ChangeExtension(track.LocalFile, ".subtitles.json");
     public static IReadOnlyList<CachedSubtitle> Read(Track track)
     {
         if (string.IsNullOrEmpty(track.LocalFile)) return [];
-        try { return (JsonSerializer.Deserialize<CachedSubtitle[]>(File.ReadAllText(FileName(track))) ?? []).Select(item => item with { Track = item.Track.NormalizeOrigin(), Lines = item.Lines.Select(line => line with { Content = Subtitles.CleanContent(line.Content) }).Where(line => line.Content.Length > 0).ToArray() }).ToArray(); }
+        try { return (JsonSerializer.Deserialize(File.ReadAllText(FileName(track)), SubtitleJsonContext.Default.CachedSubtitleArray) ?? []).Select(item => item with { Track = item.Track.NormalizeOrigin(), Lines = item.Lines.Select(line => line with { Content = Subtitles.CleanContent(line.Content) }).Where(line => line.Content.Length > 0).ToArray() }).ToArray(); }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException) { return []; }
     }
     public static async Task<IReadOnlyList<CachedSubtitle>> RefreshAsync(BilibiliClient client, Track track, CancellationToken ct,
@@ -37,7 +42,7 @@ public static class SubtitleCache
         var file = FileName(track); var staging = file + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
-            await File.WriteAllTextAsync(staging, JsonSerializer.Serialize(result), ct);
+            await File.WriteAllTextAsync(staging, JsonSerializer.Serialize(result.ToArray(), SubtitleJsonContext.Default.CachedSubtitleArray), ct);
             ct.ThrowIfCancellationRequested(); File.Move(staging, file, true);
         }
         finally { if (File.Exists(staging)) File.Delete(staging); }

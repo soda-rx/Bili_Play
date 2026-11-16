@@ -216,6 +216,7 @@ public partial class PlayerViewModel : ObservableObject, IDisposable
     [ObservableProperty] public partial double Position { get; set; }
     partial void OnPositionChanged(double value)
     {
+        if (_inTray) return;
         PositionText = Text.FormatTime(value);
         RemainingText = "−" + Text.FormatTime(Math.Max(0, Duration - value));
         UpdateSubtitleHighlight();
@@ -446,7 +447,7 @@ public partial class PlayerViewModel : ObservableObject, IDisposable
         {
             Client.ImportSession(cookies);
             Account? cached = null;
-            try { cached = JsonSerializer.Deserialize<Account>(Store.GetSetting("account", "null")); } catch (JsonException) { }
+            try { cached = JsonSerializer.Deserialize(Store.GetSetting("account", "null"), BiliPlayJsonContext.Default.Account); } catch (JsonException) { }
             long.TryParse(cookies.FirstOrDefault(c => c.Name == "DedeUserID")?.Value, out var id);
             if (cached is null || id > 0 && cached.Id != id) cached = new(id, "哔哩哔哩用户", "");
             Client.RestoreCachedAccount(cached);
@@ -517,7 +518,7 @@ public partial class PlayerViewModel : ObservableObject, IDisposable
     }
     internal async Task EnterAccountAsync(bool refreshOnline = true)
     {
-        if (refreshOnline) { NeedsLogin = false; Store.SetSetting("account", JsonSerializer.Serialize(Client.Account)); }
+        if (refreshOnline && Client.Account is not null) { NeedsLogin = false; Store.SetSetting("account", JsonSerializer.Serialize(Client.Account, BiliPlayJsonContext.Default.Account)); }
         IsLoggedIn = true; AccountName = Client.Account!.Name; QrImage = null; LoginLoading = false;
         ProfileManager.UpdateAccount(Client.Account);
         AccountUid = Client.Account.Id.ToString(); AccountLevel = $"Lv.{Client.Account.Level}";
@@ -551,7 +552,15 @@ public partial class PlayerViewModel : ObservableObject, IDisposable
     {
         if (_view == "notifications" && view != "notifications") DisposeNotifications();
         if (!_restoringNavigation && IsLoggedIn && (view != _view || view == "search" && (Tracks.Count > 0 || Uploaders.Count > 0)))
+        {
+            if (_backStack.Count >= 8)
+            {
+                var kept = _backStack.Take(7).Reverse().ToArray();
+                _backStack.Clear();
+                foreach (var item in kept) _backStack.Push(item);
+            }
             _backStack.Push(new(_view, PageTitle, SelectedFolder, BrowseSnapshot(), Uploaders.ToArray(), _query, _page, _listSearchOriginal is null ? HasMore : _listOriginalMore, SearchCategoryIndex, EmptyText, SpaceProfile, _spaceUserId));
+        }
         ResetListSearch();
         if (view != "cache") { IsCacheSelectionMode = false; SelectedCacheCount = 0; }
         if(view!="library") StopFolderPreviews();
@@ -619,7 +628,7 @@ public partial class PlayerViewModel : ObservableObject, IDisposable
     public void SaveFolderOrder()
     {
         if (Client.Account is { } account)
-            Store.SetSetting($"folderOrder:{account.Id}", JsonSerializer.Serialize(Folders.Select(folder => folder.Id).Distinct().ToArray()));
+            Store.SetSetting($"folderOrder:{account.Id}", JsonSerializer.Serialize(Folders.Select(folder => folder.Id).Distinct().ToArray(), BiliPlayJsonContext.Default.Int64Array));
     }
     private void StopFolderPreviews()
     { _folderPreviews?.Cancel(); _folderPreviews?.Dispose(); _folderPreviews=null; }
@@ -639,7 +648,7 @@ public partial class PlayerViewModel : ObservableObject, IDisposable
         var folders = await Client.GetFoldersAsync(_lifetime.Token);
         if (version != _foldersVersion || Client.Account?.Id != account) return;
         long[] saved;
-        try { saved = JsonSerializer.Deserialize<long[]>(Store.GetSetting($"folderOrder:{account}", "[]")) ?? []; }
+        try { saved = JsonSerializer.Deserialize(Store.GetSetting($"folderOrder:{account}", "[]"), BiliPlayJsonContext.Default.Int64Array) ?? []; }
         catch (JsonException) { saved = []; }
         folders = FolderOrder.Merge(folders, saved);
         Replace(Folders, folders);
@@ -1291,8 +1300,8 @@ public partial class PlayerViewModel : ObservableObject, IDisposable
     }
     private void RefreshCurrentArtwork()
     {
-        CurrentCover = Uri.TryCreate(Text.CoverImage(CurrentTrack?.Cover ?? "", 512), UriKind.Absolute, out var cover) ? ArtworkCache.Create(cover,512) : null;
-        LyricsCover = Uri.TryCreate(CurrentTrack?.Artwork, UriKind.Absolute, out var artwork) ? ArtworkCache.Create(artwork,960) : null;
+        CurrentCover = Uri.TryCreate(Text.CoverImage(CurrentTrack?.Cover ?? "", 256), UriKind.Absolute, out var cover) ? ArtworkCache.Create(cover,256) : null;
+        LyricsCover = Uri.TryCreate(CurrentTrack?.Artwork, UriKind.Absolute, out var artwork) ? ArtworkCache.Create(artwork,640) : null;
     }
     private void RefreshAccountArtwork()
     {
@@ -1350,9 +1359,39 @@ public partial class PlayerViewModel : ObservableObject, IDisposable
         ActiveSubtitleIndex = Subtitles.ActiveIndex(Lines, Position, CurrentTrack is not null && !playingCurrent);
         FollowSubtitleIndex = playingCurrent ? Subtitles.FollowIndex(Lines, Position) : ActiveSubtitleIndex;
     }
+    private bool _inTray;
+    public bool IsTrayResident => _inTray;
+    public TimeSpan TimerInterval => _timer.Interval;
+    public void SetTrayResidentMode(bool inTray)
+    {
+        if (_disposed || _inTray == inTray) return;
+        _inTray = inTray;
+        _timer.Interval = TimeSpan.FromMilliseconds(inTray ? 500 : 50);
+        if (inTray)
+        {
+            PauseFolderPreviews();
+            SetCommentsPresentationActive(false);
+            ArtworkCache.TrimMemory();
+        }
+        else
+        {
+            if (IsLibraryView) StartFolderPreviews();
+            Tick();
+        }
+    }
     private void Tick()
     {
         if (_disposed) return;
+        if (_inTray)
+        {
+            _saveTicks += 10;
+            if (_saveTicks >= 100)
+            {
+                _saveTicks = 0; Player.UpdateTimeline();
+                if (Player.Playing) SaveProgress();
+            }
+            return;
+        }
         if (!_favoriteLoading && CurrentTrack is not null && DateTimeOffset.UtcNow - _favoriteChecked > TimeSpan.FromSeconds(30))
             _ = RefreshFavoriteStateAsync();
         var active = QueueSelection.Same(CurrentTrack, Player.Current);

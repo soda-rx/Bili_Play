@@ -3,6 +3,8 @@ using System.Globalization;
 
 namespace BiliPlay.Core;
 
+internal sealed record CommentPictureRequest(string img_src, int img_width, int img_height, double img_size);
+
 public sealed record CommentPicture(string Url, int Width, int Height, double SizeKb = 0)
 {
     public static bool TryUrl(string value, out Uri? uri)
@@ -18,7 +20,7 @@ public sealed record CommentPicture(string Url, int Width, int Height, double Si
         && double.IsFinite(SizeKb) && SizeKb is >= 0 and <= 20480;
     public string OriginalUrl => TryUrl(Url, out var uri)
         ? new UriBuilder(uri!) { Path = uri!.AbsolutePath.Split('@')[0] }.Uri.AbsoluteUri : "";
-    internal object ToRequest() => new { img_src = Url, img_width = Width, img_height = Height, img_size = SizeKb };
+    internal CommentPictureRequest ToRequest() => new(Url, Width, Height, SizeKb);
     internal static double ReadSize(string value) => double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var size)
         && double.IsFinite(size) && size >= 0 ? Math.Min(size, 20480) : 0;
 }

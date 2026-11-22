@@ -94,9 +94,15 @@ public sealed partial class MainPage
         var oldHome=ViewModel.HomeGridMode;
         try
         {
-            ViewModel.HomeGridMode=true;ViewModel.Navigate("home");ViewModel.Tracks.Clear();
-            await Task.Delay(100);
-            Check(!_browseRowsEntered,"空首页提前消耗了图标甩入动画");
+            // Leave home first so any in-flight home load is cancelled, then enter a forced-empty
+            // home page: an empty page must not consume the icon entrance animation.
+            ViewModel.Navigate("settings");
+            ViewModel.PrepareEmptyHomeForTests();
+            ViewModel.HomeGridMode=true;
+            ViewModel.Navigate("home");
+            UpdateLayout();
+            await Task.Delay(180);
+            Check(!_browseRowsEntered && ViewModel.Tracks.Count == 0,"空首页提前消耗了图标甩入动画");
             for(var i=0;i<8;i++) ViewModel.Tracks.Add(new(800+i,$"BV{i}xx411c7mD",$"首页动画 {i}","合成 UP 主","",100));
             UpdateLayout();await Task.Delay(100);
             Check(_browseEntranceRows>0&&_browseRowsEntered,"异步加载的首页图标没有甩入");

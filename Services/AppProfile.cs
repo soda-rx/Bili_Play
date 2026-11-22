@@ -7,7 +7,6 @@ public static class AppProfile
     public static string ProfileId => _profileId;
     public static void SetProfile(string id) => _profileId = ProfileManager.ValidateId(id);
 #if DEVELOPMENT_BUILD
-    public static bool IsDevelopment => true;
     public static string DisplayName => "Bili Play";
     public static string BaseDataDirectoryName => "BiliPlay.Dev";
     public static string DataDirectoryName => _profileId == "default" ? BaseDataDirectoryName : Path.Combine(BaseDataDirectoryName, "profiles", _profileId);
@@ -15,7 +14,6 @@ public static class AppProfile
     public static string DownloadDirectoryName => _profileId == "default" ? "Bili_Play_Dev" : $"Bili_Play_Dev_{_profileId}";
     public static string InstanceScope => "Development";
 #else
-    public static bool IsDevelopment => false;
     public static string DisplayName => "Bili Play";
     public static string BaseDataDirectoryName => "BiliPlay";
     public static string DataDirectoryName => _profileId == "default" ? BaseDataDirectoryName : Path.Combine(BaseDataDirectoryName, "profiles", _profileId);

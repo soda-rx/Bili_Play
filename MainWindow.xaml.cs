@@ -58,21 +58,58 @@ public sealed partial class MainWindow : Window
         Activated += (_, args) =>
         {
             if (args.WindowActivationState == WindowActivationState.Deactivated) CloseSearchHistory();
-            if(RootFrame.Content is MainPage activePage) activePage.SetPresentationActive(args.WindowActivationState != WindowActivationState.Deactivated); if (!App.IsVisualCheck && args.WindowActivationState != WindowActivationState.Deactivated && ViewModel.IsLoggedIn) _ = ViewModel.RefreshFavoriteStateAsync(); };
+            if(RootFrame.Content is MainPage activePage) activePage.SetPresentationActive(args.WindowActivationState != WindowActivationState.Deactivated);
+            if (!App.IsVisualCheck && args.WindowActivationState != WindowActivationState.Deactivated && ViewModel.IsLoggedIn) _ = ViewModel.RefreshFavoriteStateAsync();
+        };
         AppWindow.Closing += (_, e) =>
         {
             if (!_exitRequested && !DebugSession.IsActive && ViewModel.IsLoggedIn && ViewModel.CloseToTray && _tray?.Available == true)
-            { SaveWindowPlacement(); if (ViewModel.CloseBehaviorIndex == 2) ViewModel.PauseForTray(); e.Cancel = true; AppWindow.Hide(); }
+            {
+                SaveWindowPlacement();
+                if (ViewModel.CloseBehaviorIndex == 2) ViewModel.PauseForTray();
+                e.Cancel = true;
+                AppWindow.Hide();
+                ResetArtworkBackdrop();
+                ViewModel.SetTrayResidentMode(true);
+                ScheduleMemoryTrim(0);
+            }
         };
         Closed += (_, _) => { CancelSearchRecommendations(); _suggestionsCache.Clear(); SaveWindowPlacement(); _placementTimer?.Stop(); _tray?.Dispose(); _hotkeys?.Dispose(); try {ViewModel.Dispose();} finally {ArtworkCache.ResetScope();DebugSession.End();} };
     }
     public void ShowMainWindow()
     {
+        Interlocked.Increment(ref _trimVersion);
+        ViewModel.SetTrayResidentMode(false);
         AppWindow.Show();
         if (AppWindow.Presenter is Microsoft.UI.Windowing.OverlappedPresenter presenter &&
             presenter.State == Microsoft.UI.Windowing.OverlappedPresenterState.Minimized) presenter.Restore();
         Activate(); SetForegroundWindow(WinRT.Interop.WindowNative.GetWindowHandle(this));
+        if (RootFrame.Content is MainPage activePage) activePage.SetPresentationActive(true);
     }
+    private static int _trimVersion;
+    internal static async void ScheduleMemoryTrim(int delayMs = 800)
+    {
+        var version = Interlocked.Increment(ref _trimVersion);
+        try
+        {
+            await Task.Delay(delayMs).ConfigureAwait(false);
+            if (Volatile.Read(ref _trimVersion) != version) return;
+            if (App.Window is MainWindow { ViewModel.Player.Playing: true }) return;
+            TrimProcessWorkingSet();
+        }
+        catch (Exception) { }
+    }
+    internal static void TrimProcessWorkingSet()
+    {
+        try
+        {
+            GC.Collect(2, GCCollectionMode.Optimized, blocking: false);
+            using var current = System.Diagnostics.Process.GetCurrentProcess();
+            _ = K32EmptyWorkingSet(current.Handle);
+        }
+        catch (Exception) { /* Best-effort memory trim when hidden or minimized. */ }
+    }
+    [DllImport("kernel32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool K32EmptyWorkingSet(nint process);
     [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool SetForegroundWindow(nint window);
     [DllImport("user32.dll")] private static extern uint GetDpiForWindow(nint window);
     private void TitleBarSizeChanged(object sender, SizeChangedEventArgs e)

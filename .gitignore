@@ -17,6 +17,7 @@ Generated Files/
 # IDE and per-user build/publish settings
 .vs/
 .idea/
+.vscode/
 _ReSharper*/
 *.user
 *.suo
@@ -27,6 +28,17 @@ _ReSharper*/
 *.dotCover
 .winapp/
 .codex/
+
+# Editor/backup/temporary leftovers
+*.bak
+*.old
+*.tmp
+*.orig
+*.rej
+*~
+desktop.ini
+.DS_Store
+Thumbs.db
 
 # Build logs, diagnostics and test output
 [Ll]og/
@@ -57,6 +69,7 @@ BundleArtifacts/
 *.appxbundle
 *.appxupload
 *.appxsym
+*.cer
 
 # Private credentials and local environment
 *.pfx

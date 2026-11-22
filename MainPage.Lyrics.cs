@@ -1,6 +1,7 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using BiliPlay.Core;
+using BiliPlay.ViewModels;
 using Microsoft.UI.Composition;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -32,9 +33,15 @@ public sealed partial class MainPage
         FocusLyric(true);
     }
     private void ResumeLyricsClick(object sender, RoutedEventArgs args) => ResumeLyricFollowing();
+    private void SubtitleSelectionChanged(object sender, SelectionChangedEventArgs args)
+    {
+        if (sender is ComboBox { SelectedItem: SubtitleChoice choice }) ViewModel.SelectedSubtitleChoice = choice;
+    }
     private void LyricsPointerWheelChanged(object sender, PointerRoutedEventArgs args) => PauseLyricFollowing();
     private void LyricsPointerPressed(object sender, PointerRoutedEventArgs args)
-    { if (args.Pointer.PointerDeviceType == Microsoft.UI.Input.PointerDeviceType.Touch) PauseLyricFollowing(); }
+    {
+        if (args.Pointer.PointerDeviceType == Microsoft.UI.Input.PointerDeviceType.Touch) PauseLyricFollowing();
+    }
     private ScrollViewer? _lyricsScroller;
     private bool _lyricLayoutPending;
     private bool _hadVisibleLyrics;

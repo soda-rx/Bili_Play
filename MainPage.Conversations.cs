@@ -21,12 +21,15 @@ public sealed class AvatarColumnConverter : IValueConverter
 }
 public sealed class BubbleBrushConverter : IValueConverter
 {
-    public object Convert(object value, Type type, object parameter, string language) => value is true ? new SolidColorBrush(Windows.UI.Color.FromArgb(255, 36, 201, 139)) : (Brush)Application.Current.Resources["CardBackgroundFillColorDefaultBrush"];
+    // Own bubbles use the system accent colour and the matching on-accent text colour so they
+    // follow the Windows accent / dark-mode choice instead of a fixed brand green.
+    public object Convert(object value, Type type, object parameter, string language) => value is true ? Theme("AccentFillColorDefaultBrush") : Theme("CardBackgroundFillColorDefaultBrush");
     public object ConvertBack(object value, Type type, object parameter, string language) => throw new NotSupportedException();
+    internal static Brush Theme(string key) => Application.Current.Resources.TryGetValue(key, out var value) && value is Brush brush ? brush : new SolidColorBrush(Microsoft.UI.Colors.Transparent);
 }
 public sealed class BubbleTextBrushConverter : IValueConverter
 {
-    public object Convert(object value, Type type, object parameter, string language) => value is true ? new SolidColorBrush(Microsoft.UI.Colors.Black) : (Brush)Application.Current.Resources["TextFillColorPrimaryBrush"];
+    public object Convert(object value, Type type, object parameter, string language) => value is true ? BubbleBrushConverter.Theme("TextOnAccentFillColorPrimaryBrush") : BubbleBrushConverter.Theme("TextFillColorPrimaryBrush");
     public object ConvertBack(object value, Type type, object parameter, string language) => throw new NotSupportedException();
 }
 public sealed partial class MainPage

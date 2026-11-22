@@ -147,7 +147,10 @@ public sealed partial class MainPage : Page
         if (NotificationsPanel is not null) NotificationsPanel.Width = Math.Max(0, args.NewSize.Width - 56);
         UpdateNotificationLayout();
     }
-    private void PlayerBarSizeChanged(object sender, SizeChangedEventArgs args) => ViewModel.PlayerBarHeight = args.NewSize.Height;
+    private void PlayerBarSizeChanged(object sender, SizeChangedEventArgs args)
+    {
+        ViewModel.PlayerBarHeight = args.NewSize.Height;
+    }
     private void CloseCommentsClick(object sender, RoutedEventArgs args) => ViewModel.ShowComments = false;
     private async void CommentAuthorClick(object sender, RoutedEventArgs args)
     {

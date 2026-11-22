@@ -29,7 +29,7 @@ public static class DebugSession
         }
         var cover=new Uri(Path.Combine(AppContext.BaseDirectory,"Assets","Square150x150Logo.scale-200.png")).AbsoluteUri;
         var lines=Enumerable.Range(0,6).Select(i=>new SubtitleLine(i*4,(i+1)*4,new[]{"这是离线调试的示例歌词","所有数据只在本次调试中使用","试着打开播放列表与收藏夹","也可以查看歌词与页面动画","不会连接真实的哔哩哔哩账号","退出后这些示例数据将被清理"}[i])).ToArray();
-        File.WriteAllText(Path.ChangeExtension(file,".subtitles.json"),JsonSerializer.Serialize(new[]{new CachedSubtitle(new("zh","示例字幕",new Uri("https://i0.hdslb.com/demo.json"),false),lines)}));
+        File.WriteAllText(Path.ChangeExtension(file,".subtitles.json"),JsonSerializer.Serialize(new[]{new CachedSubtitle(new("zh","示例字幕",new Uri("https://i0.hdslb.com/demo.json"),false),lines)},SubtitleJsonContext.Default.CachedSubtitleArray));
         return Enumerable.Range(1,8).Select(i=>new Track(i,"BV"+i.ToString("D10"),$"离线示例曲目 {i}","Bili Play 调试示例",cover,24,i,LocalFile:file)).ToArray();
     }
     public sealed class OfflineHandler : HttpMessageHandler

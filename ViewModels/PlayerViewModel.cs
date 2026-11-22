@@ -216,6 +216,7 @@ public partial class PlayerViewModel : ObservableObject, IDisposable
     [ObservableProperty] public partial double Position { get; set; }
     partial void OnPositionChanged(double value)
     {
+        if (_inTray) return;
         PositionText = Text.FormatTime(value);
         RemainingText = "−" + Text.FormatTime(Math.Max(0, Duration - value));
         UpdateSubtitleHighlight();
@@ -380,6 +381,8 @@ public partial class PlayerViewModel : ObservableObject, IDisposable
         PreferHiRes = Store.GetSetting("preferHiRes", "true") != "false";
         Player.PreferHiRes = PreferHiRes;
         Lines.CollectionChanged += (_, _) => { OnPropertyChanged(nameof(HasLyrics)); OnPropertyChanged(nameof(IsSubtitleLoading)); UpdateSubtitleHighlight(); };
+        SubtitleTracks.CollectionChanged += (_, _) => RebuildSubtitleChoices();
+        RebuildSubtitleChoices();
         Tracks.CollectionChanged += (_, _) => { OnPropertyChanged(nameof(HasTracks)); OnPropertyChanged(nameof(CanSelectCachedTracks)); OnPropertyChanged(nameof(CacheSelectionOpacity)); UpdateClearAvailability(); };
         Folders.CollectionChanged += (_, _) => { if (IsLibraryView) IsEmpty = Folders.Count == 0; };
         Volume = double.TryParse(Store.GetSetting("volume", "75"), CultureInfo.InvariantCulture, out var volume) ? volume : 75;
@@ -446,7 +449,7 @@ public partial class PlayerViewModel : ObservableObject, IDisposable
         {
             Client.ImportSession(cookies);
             Account? cached = null;
-            try { cached = JsonSerializer.Deserialize<Account>(Store.GetSetting("account", "null")); } catch (JsonException) { }
+            try { cached = JsonSerializer.Deserialize(Store.GetSetting("account", "null"), BiliPlayJsonContext.Default.Account); } catch (JsonException) { }
             long.TryParse(cookies.FirstOrDefault(c => c.Name == "DedeUserID")?.Value, out var id);
             if (cached is null || id > 0 && cached.Id != id) cached = new(id, "哔哩哔哩用户", "");
             Client.RestoreCachedAccount(cached);
@@ -473,7 +476,6 @@ public partial class PlayerViewModel : ObservableObject, IDisposable
     }
     [RelayCommand(AllowConcurrentExecutions = true)]
     private Task ReconnectAsync() => InitializeAsync();
-    [RelayCommand(AllowConcurrentExecutions = true)]
     private async Task LoginAsync()
     {
         _login?.Cancel(); _login?.Dispose();
@@ -517,7 +519,7 @@ public partial class PlayerViewModel : ObservableObject, IDisposable
     }
     internal async Task EnterAccountAsync(bool refreshOnline = true)
     {
-        if (refreshOnline) { NeedsLogin = false; Store.SetSetting("account", JsonSerializer.Serialize(Client.Account)); }
+        if (refreshOnline && Client.Account is not null) { NeedsLogin = false; Store.SetSetting("account", JsonSerializer.Serialize(Client.Account, BiliPlayJsonContext.Default.Account)); }
         IsLoggedIn = true; AccountName = Client.Account!.Name; QrImage = null; LoginLoading = false;
         ProfileManager.UpdateAccount(Client.Account);
         AccountUid = Client.Account.Id.ToString(); AccountLevel = $"Lv.{Client.Account.Level}";
@@ -540,7 +542,13 @@ public partial class PlayerViewModel : ObservableObject, IDisposable
             }
             finally { _restoringQueue = false; }
             var saved = Store.GetSetting($"queueCurrent:{Client.Account.Id}", "");
-            UpdateCurrentDisplay(Queue.FirstOrDefault(t => $"{t.Bvid}:{t.Page}" == saved) ?? Queue.FirstOrDefault());
+            var restored = Queue.FirstOrDefault(t => $"{t.Bvid}:{t.Page}" == saved) ?? Queue.FirstOrDefault();
+            UpdateCurrentDisplay(restored);
+            if (restored is not null)
+            {
+                var resume = RestoreResumePosition(restored);
+                // Restore the logical position without opening a decoder or downloading audio.
+            }
         }
         if (!refreshOnline) { if(accountChanged) Navigate("home"); return; }
         var folders=SafeAsync(RefreshFoldersAsync,busy:IsLibraryView);
@@ -551,7 +559,15 @@ public partial class PlayerViewModel : ObservableObject, IDisposable
     {
         if (_view == "notifications" && view != "notifications") DisposeNotifications();
         if (!_restoringNavigation && IsLoggedIn && (view != _view || view == "search" && (Tracks.Count > 0 || Uploaders.Count > 0)))
+        {
+            if (_backStack.Count >= 8)
+            {
+                var kept = _backStack.Take(7).Reverse().ToArray();
+                _backStack.Clear();
+                foreach (var item in kept) _backStack.Push(item);
+            }
             _backStack.Push(new(_view, PageTitle, SelectedFolder, BrowseSnapshot(), Uploaders.ToArray(), _query, _page, _listSearchOriginal is null ? HasMore : _listOriginalMore, SearchCategoryIndex, EmptyText, SpaceProfile, _spaceUserId));
+        }
         ResetListSearch();
         if (view != "cache") { IsCacheSelectionMode = false; SelectedCacheCount = 0; }
         if(view!="library") StopFolderPreviews();
@@ -576,13 +592,13 @@ public partial class PlayerViewModel : ObservableObject, IDisposable
         switch (view)
         {
             case "home":
-                PageTitle = "首页"; 
+                PageTitle = "首页";
                 Replace(Tracks, _homeCache); HasMore = _homeMore;
                 IsEmpty = Tracks.Count == 0; EmptyText = "正在寻找推荐里的音乐…"; break;
             case "library": PageTitle = "收藏夹"; IsEmpty = Folders.Count == 0; EmptyText = "还没有收藏夹，可以新建一个。"; StartFolderPreviews(); break;
             case "search": PageTitle = "搜索"; Tracks.Clear(); EmptyText = "输入关键词，寻找想听的内容。"; IsEmpty = true; break;
             case "history":
-                PageTitle = "最近播放"; 
+                PageTitle = "最近播放";
                 Replace(Tracks, Store.History(Client.Account!.Id)); IsEmpty = Tracks.Count == 0; EmptyText = "播放过的内容会出现在这里。"; break;
             case "playlist":
                 RefreshPlaylistSearch(); PageTitle = "播放列表"; IsEmpty = Queue.Count == 0; EmptyText = "播放列表为空。"; break;
@@ -619,7 +635,7 @@ public partial class PlayerViewModel : ObservableObject, IDisposable
     public void SaveFolderOrder()
     {
         if (Client.Account is { } account)
-            Store.SetSetting($"folderOrder:{account.Id}", JsonSerializer.Serialize(Folders.Select(folder => folder.Id).Distinct().ToArray()));
+            Store.SetSetting($"folderOrder:{account.Id}", JsonSerializer.Serialize(Folders.Select(folder => folder.Id).Distinct().ToArray(), BiliPlayJsonContext.Default.Int64Array));
     }
     private void StopFolderPreviews()
     { _folderPreviews?.Cancel(); _folderPreviews?.Dispose(); _folderPreviews=null; }
@@ -639,7 +655,7 @@ public partial class PlayerViewModel : ObservableObject, IDisposable
         var folders = await Client.GetFoldersAsync(_lifetime.Token);
         if (version != _foldersVersion || Client.Account?.Id != account) return;
         long[] saved;
-        try { saved = JsonSerializer.Deserialize<long[]>(Store.GetSetting($"folderOrder:{account}", "[]")) ?? []; }
+        try { saved = JsonSerializer.Deserialize(Store.GetSetting($"folderOrder:{account}", "[]"), BiliPlayJsonContext.Default.Int64Array) ?? []; }
         catch (JsonException) { saved = []; }
         folders = FolderOrder.Merge(folders, saved);
         Replace(Folders, folders);
@@ -673,7 +689,7 @@ public partial class PlayerViewModel : ObservableObject, IDisposable
     private async Task BrowseFolderAsync(Folder folder)
     {
         Navigate("folder"); SelectedFolder = folder;
-        PageTitle = folder.Title; 
+        PageTitle = folder.Title;
         if(DebugSession.IsActive){Replace(Tracks,_homeCache);HasMore=false;IsEmpty=Tracks.Count==0;return;}
         Tracks.Clear(); _page = 1;
         _browse = new(); var version = _browseVersion;
@@ -696,7 +712,7 @@ public partial class PlayerViewModel : ObservableObject, IDisposable
         Tracks.ResetLoading(); Uploaders.ResetLoading();
         Uploaders.Clear(); _query = text; _page = 1; _browse = new(); HasMore = false; IsEmpty = false;
         var version = _browseVersion;
-        PageTitle = "搜索结果"; 
+        PageTitle = "搜索结果";
         if (SearchCategoryIndex == 1)
         {
             var users = await Client.SearchUploadersAsync(text, 1, _browse.Token);
@@ -912,9 +928,11 @@ public partial class PlayerViewModel : ObservableObject, IDisposable
             track = Store.ApplyMetadata(Client.Account!.Id, track);
             if (version != _playVersion || !Queue.Any(t => QueueSelection.Same(t, track))) return;
             UpdateCurrentDisplay(track);
+            _resumeExpected = startPosition > 0 ? startPosition : 0;
+            _resumeExpectedAt = Environment.TickCount64;
             await Player.PlayAsync(track, startPosition, token);
             if (version != _playVersion) return;
-            Store.SaveProgress(Client.Account.Id, track, 0);
+            Store.SaveProgress(Client.Account.Id, track, startPosition);
         }
         catch (OperationCanceledException) when (version != _playVersion) { }
         finally { if (ReferenceEquals(_trackLoad, load)) _trackLoad = null; if (version == _playVersion) IsPlaybackLoading = false; }
@@ -959,11 +977,13 @@ public partial class PlayerViewModel : ObservableObject, IDisposable
             {
                 var preferred = _subtitleManuallySelected ? SelectedSubtitle : null;
                 Replace(SubtitleTracks, cached.Select(x => x.Track));
-                SetAutomaticSubtitle(SubtitleTracks.FirstOrDefault(t => t.Language == preferred?.Language && t.IsAuto == preferred.IsAuto)
+                if (LyricsHidden) SetAutomaticSubtitle(null);
+                else SetAutomaticSubtitle(SubtitleTracks.FirstOrDefault(t => t.Language == preferred?.Language && t.IsAuto == preferred.IsAuto)
                     ?? SubtitleSelection.Choose(SubtitleTracks, track.Title));
             }
+            if (LyricsHidden) SubtitleStatus = LyricsHiddenStatus;
             // Isolated native rendering never uses the user's session or live subtitle endpoints.
-            if (!IsOnline || App.IsVisualCheck) { if (cached.Count == 0) SubtitleStatus = "暂无离线字幕"; return; }
+            if (!IsOnline || App.IsVisualCheck) { if (!LyricsHidden && cached.Count == 0) SubtitleStatus = "暂无离线字幕"; return; }
             if (track.Cid <= 0 || track.Aid <= 0)
             {
                 var video = await Client.GetVideoAsync(track.Bvid, track.Aid, token);
@@ -980,28 +1000,30 @@ public partial class PlayerViewModel : ObservableObject, IDisposable
             token.ThrowIfCancellationRequested();
             if (!IsCurrent()) return;
             // Keep usable cached lyrics visible when the online response has no available tracks.
-            if (subtitles.Count == 0 && cached.Count > 0) { SubtitleStatus = "离线字幕"; return; }
+            if (subtitles.Count == 0 && cached.Count > 0) { SubtitleStatus = LyricsHidden ? LyricsHiddenStatus : "离线字幕"; return; }
             var selection = _subtitleManuallySelected ? SelectedSubtitle : null;
             Replace(SubtitleTracks, subtitles);
+            if (LyricsHidden) { SetAutomaticSubtitle(null); SubtitleStatus = LyricsHiddenStatus; return; }
             SubtitleStatus = subtitles.Count > 0 ? "选择字幕轨道" : "暂无字幕";
             SetAutomaticSubtitle(null);
             SetAutomaticSubtitle(subtitles.FirstOrDefault(t => t.Language == selection?.Language && t.IsAuto == selection.IsAuto)
                 ?? SubtitleSelection.Choose(subtitles, track.Title));
         }
         catch (OperationCanceledException)
-        { if (IsCurrent()) SubtitleStatus = Lines.Count > 0 ? "离线字幕" : "字幕加载超时，可点击重试"; }
+        { if (IsCurrent()) SubtitleStatus = LyricsHidden ? LyricsHiddenStatus : Lines.Count > 0 ? "离线字幕" : "字幕加载超时，可点击重试"; }
         catch (Exception)
-        { if (IsCurrent()) SubtitleStatus = Lines.Count > 0 ? "离线字幕" : "字幕暂时无法加载，可点击重试"; }
+        { if (IsCurrent()) SubtitleStatus = LyricsHidden ? LyricsHiddenStatus : Lines.Count > 0 ? "离线字幕" : "字幕暂时无法加载，可点击重试"; }
     }
     partial void OnSelectedSubtitleChanged(SubtitleTrack? value)
     {
+        OnPropertyChanged(nameof(SelectedSubtitleChoice));
         if (!_settingAutomaticSubtitle && value is not null) _subtitleManuallySelected = true;
         _ = LoadSelectedSubtitleAsync(value);
     }
     private async Task LoadSelectedSubtitleAsync(SubtitleTrack? subtitle)
     {
         _subtitles?.Cancel(); _subtitles?.Dispose();
-        if (subtitle is null) { _subtitles = null; return; }
+        if (subtitle is null || _lyricsHidden) { _subtitles = null; return; }
         var cts = _subtitles = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
         var track = CurrentTrack;
         Lines.Clear(); ActiveSubtitleIndex = -1;
@@ -1035,7 +1057,15 @@ public partial class PlayerViewModel : ObservableObject, IDisposable
     public void Seek(double seconds)
     {
         if (CurrentTrack is null || !double.IsFinite(seconds)) return;
-        if (QueueSelection.Same(CurrentTrack, Player.Current)) Player.Seek(seconds);
+        _resumeExpected = 0;
+        if (QueueSelection.Same(CurrentTrack, Player.Current))
+        {
+            Player.Seek(seconds);
+            _previewPosition = Math.Clamp(seconds, 0, Math.Max(0, CurrentTrack.Duration));
+            // A seek issued while the resumed decoder is still opening must not be overwritten by
+            // its not-yet-seeked 0:00 position.
+            if (Player.Duration <= 0) { _resumeExpected = _previewPosition; _resumeExpectedAt = Environment.TickCount64; }
+        }
         else _previewPosition = Math.Clamp(seconds, 0, Math.Max(0, CurrentTrack.Duration));
         Position = Math.Clamp(seconds, 0, Math.Max(0, Duration));
     }
@@ -1149,6 +1179,7 @@ public partial class PlayerViewModel : ObservableObject, IDisposable
     {
         if(DebugSession.IsActive)return;
         _selectionVersion++; CancelDownloads(); SaveProgress(); _playVersion++; Player.Stop(); ShowQueue = false; SessionVault.Clear(); Client.ClearSession(); NeedsLogin = false; IsLoggedIn = false;
+        ClearSleepTimer(); SetLyricsHidden(false);
         await LoginAsync();
     }
     [RelayCommand]
@@ -1246,7 +1277,7 @@ public partial class PlayerViewModel : ObservableObject, IDisposable
     [RelayCommand(CanExecute = nameof(CanClearQueue))]
     private void ClearQueue()
     {
-        _selectionVersion++; Queue.Clear();
+        _selectionVersion++; Queue.Clear(); ClearSleepTimer(); SetLyricsHidden(false);
     }
     private static string Friendly(Exception e) => e switch
     {
@@ -1264,7 +1295,8 @@ public partial class PlayerViewModel : ObservableObject, IDisposable
     }
     private void UpdateCurrentDisplay(Track? track)
     {
-        var changed = !QueueSelection.Same(CurrentTrack, track) || CurrentTrack != track;
+        var metadataChanged = CurrentTrack != track;
+        var changed = !QueueSelection.Same(CurrentTrack, track);
         CurrentTrack = track;
         if (track is null) { IsLyricsOpen = false; IsPlaybackLoading = false; }
         if (Player.Current is null) Player.PrepareSystemSession(track);
@@ -1273,15 +1305,16 @@ public partial class PlayerViewModel : ObservableObject, IDisposable
         IsQualitySwitching = track is not null && QueueSelection.Same(track, Player.Current) && Player.IsQualitySwitching;
         if (changed)
         {
-            _previewPosition = 0; IsSeeking = false; Position = 0;
+
+            _previewPosition = 0; _resumeExpected = 0; IsSeeking = false; Position = 0;
             IsCurrentFavorited = false; _favoriteVersion++; _favoriteLoading = false;
             _ = RefreshFavoriteStateAsync();
             _currentUploader = 0; IsFollowingUploader = false; CanFollowUploader = false;
             _ = LoadUploaderRelationAsync(track);
-            RefreshCurrentArtwork();
             if (track is not null && Client.Account is { Id: > 0 } account)
                 Store.SetSetting($"queueCurrent:{account.Id}", $"{track.Bvid}:{track.Page}");
         }
+        if (metadataChanged) RefreshCurrentArtwork();
         PrepareSubtitles(track);
         PlayGlyph = Player.Playing ? "\uE769" : "\uE768"; PlayLabel = Player.Playing ? "暂停" : "播放";
         var duration = QueueSelection.Same(track, Player.Current) && Player.Duration > 0 ? Player.Duration : track?.Duration ?? 0;
@@ -1291,8 +1324,8 @@ public partial class PlayerViewModel : ObservableObject, IDisposable
     }
     private void RefreshCurrentArtwork()
     {
-        CurrentCover = Uri.TryCreate(Text.CoverImage(CurrentTrack?.Cover ?? "", 512), UriKind.Absolute, out var cover) ? ArtworkCache.Create(cover,512) : null;
-        LyricsCover = Uri.TryCreate(CurrentTrack?.Artwork, UriKind.Absolute, out var artwork) ? ArtworkCache.Create(artwork,960) : null;
+        CurrentCover = Uri.TryCreate(Text.CoverImage(CurrentTrack?.Cover ?? "", 256), UriKind.Absolute, out var cover) ? ArtworkCache.Create(cover,256) : null;
+        LyricsCover = Uri.TryCreate(CurrentTrack?.Artwork, UriKind.Absolute, out var artwork) ? ArtworkCache.Create(artwork,640) : null;
     }
     private void RefreshAccountArtwork()
     {
@@ -1350,26 +1383,71 @@ public partial class PlayerViewModel : ObservableObject, IDisposable
         ActiveSubtitleIndex = Subtitles.ActiveIndex(Lines, Position, CurrentTrack is not null && !playingCurrent);
         FollowSubtitleIndex = playingCurrent ? Subtitles.FollowIndex(Lines, Position) : ActiveSubtitleIndex;
     }
+    private bool _inTray;
+    public bool IsTrayResident => _inTray;
+    public TimeSpan TimerInterval => _timer.Interval;
+    public void SetTrayResidentMode(bool inTray)
+    {
+        if (_disposed || _inTray == inTray) return;
+        _inTray = inTray;
+        _timer.Interval = TimeSpan.FromMilliseconds(inTray ? 500 : 50);
+        if (inTray)
+        {
+            PauseFolderPreviews();
+            SetCommentsPresentationActive(false);
+            ArtworkCache.TrimMemory();
+        }
+        else
+        {
+            if (IsLibraryView) StartFolderPreviews();
+            Tick();
+        }
+    }
     private void Tick()
     {
         if (_disposed) return;
+        UpdateSleepTimer();
+        if (_inTray)
+        {
+            _saveTicks += 10;
+            if (_saveTicks >= 100)
+            {
+                _saveTicks = 0; Player.UpdateTimeline();
+                if (Player.Playing) SaveProgress();
+            }
+            return;
+        }
         if (!_favoriteLoading && CurrentTrack is not null && DateTimeOffset.UtcNow - _favoriteChecked > TimeSpan.FromSeconds(30))
             _ = RefreshFavoriteStateAsync();
         var active = QueueSelection.Same(CurrentTrack, Player.Current);
         var duration = active && Player.Duration > 0 ? Player.Duration : CurrentTrack?.Duration ?? 0;
         Duration = Math.Max(1, duration);
-        if (!IsSeeking) Position = active ? Player.Position : _previewPosition;
+        if (!IsSeeking)
+        {
+            var next = active ? Player.Position : _previewPosition;
+            if (active && _resumeExpected > 0)
+            {
+                // While the decoder is still opening its position reads 0; keep the restored or
+                // seeked target on screen until the seeking lands so the lyrics never flash back.
+                // Paused preloads keep the target indefinitely; during real playback fall back after
+                // a few seconds in case the engine refused the seek.
+                var landed = Player.Position >= _resumeExpected - 0.75;
+                var abandoned = Player.Playing && Environment.TickCount64 - _resumeExpectedAt > 3000 && Player.Position > 0;
+                if (landed || abandoned) _resumeExpected = 0; else next = _resumeExpected;
+            }
+            Position = next;
+        }
         PositionText = Text.FormatTime(Position);
         RemainingText = "−" + Text.FormatTime(Math.Max(0, duration - Position));
         UpdateSubtitleHighlight();
         if (++_saveTicks >= 100)
         {
             _saveTicks = 0; Player.UpdateTimeline();
-            if (Player.Playing) SaveProgress();
+            if (Player.Playing || active && Player.Duration > 0 && Player.Position > 0) SaveProgress();
         }
     }
     public void SaveProgress()
-    { if (Client.Account is { } account && Player.Current is { } track) Store.SaveProgress(account.Id, track, Player.Position); }
+    { if (Client.Account is { } account && CurrentTrack is { } track) Store.SaveProgress(account.Id, track, Position); }
     partial void OnVolumeChanged(double value)
     {
         if (Player is not null) Player.Volume = value / 100;
@@ -1399,6 +1477,7 @@ public partial class PlayerViewModel : ObservableObject, IDisposable
         SaveProgress(); _playVersion++; _browseVersion++;
         _browse?.Cancel(); _subtitleDiscovery?.Cancel(); _subtitles?.Cancel(); _folderPreviews?.Cancel(); _foldersVersion++;
         Player.Stop(); SessionVault.Clear(); Client.ClearSession();
+        ClearSleepTimer(); SetLyricsHidden(false);
         ClearAccountPages();
         IsLoggedIn = false; AccountName = "尚未登录"; AccountAvatar = null; AccountLargeAvatar = null; IsVip = false; IsLyricsOpen = false;
         _homeCache.Clear(); _regionPage = 0; _hasLoadedHome = false; _homeMore = true;

@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices.WindowsRuntime;
 using BiliPlay.Core;
 using Microsoft.UI.Dispatching;
 using Windows.Media;
@@ -21,7 +22,7 @@ public sealed class PlaybackService(BilibiliClient client, DispatcherQueue dispa
     public string Quality => _engine?.Quality ?? "";
     public string SelectedQuality => _engine?.SelectedQuality ?? "";
     public bool IsQualitySwitching => _engine?.IsQualitySwitching == true;
-    public IReadOnlyList<string> Qualities => _engine?.Qualities ?? [];
+    public IReadOnlyList<string> Qualities => _engine?.Qualities ?? Array.Empty<string>();
     public bool HasHiRes => _engine?.HasHiRes == true;
     public void SelectQuality(string quality) => _engine?.SelectQuality(quality);
     public double Volume
@@ -55,6 +56,7 @@ public sealed class PlaybackService(BilibiliClient client, DispatcherQueue dispa
     }
     public void PrepareSystemSession(Track? track) { if (!App.IsVisualCheck) Engine.PrepareSystemSession(track); }
     public Task PlayAsync(Track track, double startPosition = 0, CancellationToken token = default) => Engine.PlayAsync(track, startPosition, token);
+    public Task PrepareAsync(Track track, double startPosition = 0, CancellationToken token = default) => Engine.PrepareAsync(track, startPosition, token);
     public void Toggle() => _engine?.Toggle();
     public void Resume() => _engine?.Resume();
     public void Pause() => _engine?.Pause();
@@ -81,9 +83,12 @@ internal sealed class PlaybackEngine : IDisposable
     private AudioStream? _stream, _availableStream;
     private bool _resumeAfterOpen = true;
     private bool _pauseRequested;
+    // When starting at a non-zero position the decoder must seek before it becomes audible,
+    // otherwise the first second of the track leaks through and the UI flashes back to 0:00.
+    private bool _playAfterOpen;
     public bool HasHiRes => _availableStream?.HasHiRes == true || _availableStream?.Quality.StartsWith("Hi-Res", StringComparison.Ordinal) == true;
     public IReadOnlyList<string> Qualities => _availableStream is { Fallback: not null } audio
-        ? [audio.Fallback.Quality, audio.Quality] : Current is null ? [] : [Quality];
+        ? (string[])[audio.Fallback.Quality, audio.Quality] : Current is null ? Array.Empty<string>() : (string[])[Quality];
     public void SelectQuality(string quality)
     {
         if (quality == _pendingQuality) return;
@@ -121,6 +126,7 @@ internal sealed class PlaybackEngine : IDisposable
             // Both decoders are ready before the audible deck is changed.
             var playing = prepared.ActivateInsteadOf(live);
             _audio = prepared; prepared = null; _stream = selected; _fallbackPosition = 0; _resumeAfterOpen = playing;
+            _playAfterOpen = false;
             WirePlayer(_player);
             live.Retire(); PublishPlaybackState();
         }
@@ -141,12 +147,13 @@ internal sealed class PlaybackEngine : IDisposable
         }
     }
     private double _fallbackPosition;
+    private double? _seekTarget;
     private bool _pageRetried;
     private bool _disposed;
     public string Quality => _stream?.Quality ?? (Current?.LocalFile.Length > 0 ? "MP3" : "");
     public Track? Current { get; private set; }
     public bool Playing => _player.PlaybackSession.PlaybackState == MediaPlaybackState.Playing;
-    public double Position => _player.PlaybackSession.Position.TotalSeconds;
+    public double Position => _seekTarget ?? _player.PlaybackSession.Position.TotalSeconds;
     public double Duration => _player.PlaybackSession.NaturalDuration.TotalSeconds;
     public double Volume { get => _player.Volume; set => _player.Volume = Math.Clamp(value, 0, 1); }
     public double PlaybackRate
@@ -202,14 +209,29 @@ internal sealed class PlaybackEngine : IDisposable
         player.PlaybackSession.PlaybackStateChanged += (_, _) => _dispatcher.TryEnqueue(() =>
         { if (!_disposed && ReferenceEquals(player, _player)) PublishPlaybackState(); });
         player.MediaOpened += (_, _) => _dispatcher.TryEnqueue(() =>
-        { if (_disposed || !ReferenceEquals(player, _player)) return; if (_fallbackPosition > 0) { Seek(_fallbackPosition); _fallbackPosition = 0; } if (!_resumeAfterOpen) _player.Pause(); Changed?.Invoke(); });
+        {
+            if (_disposed || !ReferenceEquals(player, _player)) return;
+            ApplyPendingSeek();
+            if (!_resumeAfterOpen) _player.Pause();
+            else if (_playAfterOpen && _seekTarget is null) { _playAfterOpen = false; _player.Play(); }
+            Changed?.Invoke();
+        });
+        player.PlaybackSession.SeekCompleted += (_, _) => _dispatcher.TryEnqueue(() =>
+        {
+            if (_disposed || !ReferenceEquals(player, _player) || _seekTarget is not { } target) return;
+            if (Math.Abs(player.PlaybackSession.Position.TotalSeconds - target) > .75) { ApplyPendingSeek(); return; }
+            _seekTarget = null;
+            if (_playAfterOpen && !_pauseRequested) { _playAfterOpen = false; player.Play(); }
+            Changed?.Invoke();
+        });
         player.MediaEnded += (_, _) => _dispatcher.TryEnqueue(() => { if (!_disposed && ReferenceEquals(player, _player)) Ended?.Invoke(); });
         player.MediaFailed += (_, _) => _dispatcher.TryEnqueue(() =>
         {
             if (_disposed || !ReferenceEquals(player, _player)) return;
             if (_stream?.Fallback is { } fallback && Current is not null)
             {
-                _fallbackPosition = Position; _resumeAfterOpen = Playing;
+                _fallbackPosition = Position; _seekTarget = _fallbackPosition; _resumeAfterOpen = !_pauseRequested;
+                _playAfterOpen = _resumeAfterOpen && _fallbackPosition > 0;
                 SetSource(fallback);
                 Changed?.Invoke();
                 return;
@@ -230,7 +252,13 @@ internal sealed class PlaybackEngine : IDisposable
         updater.Update(); _controls.PlaybackStatus = MediaPlaybackStatus.Paused;
         _ = ApplyThumbnailAsync(track);
     }
-    public async Task PlayAsync(Track track, double startPosition = 0, CancellationToken cancellation = default)
+    public Task PlayAsync(Track track, double startPosition = 0, CancellationToken cancellation = default) =>
+        StartAsync(track, startPosition, play: true, cancellation);
+    // Loads the decoder and pauses at the requested position without making any sound, so a
+    // restored session can paint the slider and resume instantly.
+    public Task PrepareAsync(Track track, double startPosition = 0, CancellationToken cancellation = default) =>
+        StartAsync(track, startPosition, play: false, cancellation);
+    private async Task StartAsync(Track track, double startPosition, bool play, CancellationToken cancellation = default)
     {
         _mediaArtwork.Reset();
         CancelQualitySwitch();
@@ -238,20 +266,33 @@ internal sealed class PlaybackEngine : IDisposable
         _load?.Dispose();
         var load = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
         _load = load;
-        var token = load.Token; _pauseRequested = false;
+        var token = load.Token; _pauseRequested = !play;
         var stream = string.IsNullOrEmpty(track.LocalFile) ? await _client.GetAudioAsync(track, token) : null;
         token.ThrowIfCancellationRequested();
         _pageRetried = false;
-        _fallbackPosition = Math.Max(0, startPosition); _resumeAfterOpen = !_pauseRequested; _availableStream = stream;
+        _fallbackPosition = Math.Max(0, startPosition); _seekTarget = _fallbackPosition; _resumeAfterOpen = play;
+        _playAfterOpen = play;
+        _availableStream = stream;
         Current = track;
         _controls.IsPlayEnabled = _controls.IsPauseEnabled = _controls.IsNextEnabled = _controls.IsPreviousEnabled = true;
         if (stream is not null) SetSource(AudioQualityPreference.Choose(stream, PreferHiRes, _client.Account?.IsVip == true));
         else
         {
+#if VISUAL_CHECKS
+            if (App.IsVisualCheck)
+            {
+                _proxy.Clear(); _player.Pause(); _player.Source = null; _item?.Source.Dispose(); _stream = null;
+                _item = new(MediaSource.CreateFromStream(new MemoryStream(File.ReadAllBytes(track.LocalFile)).AsRandomAccessStream(), "audio/wav"));
+                _player.Source = _item;
+            }
+            else
+#endif
+            {
             var file = await Windows.Storage.StorageFile.GetFileFromPathAsync(track.LocalFile);
             token.ThrowIfCancellationRequested();
             _proxy.Clear(); _player.Pause(); _player.Source = null; _item?.Source.Dispose(); _stream = null;
             _item = new(MediaSource.CreateFromStorageFile(file)); _player.Source = _item;
+            }
         }
         var updater = _controls.DisplayUpdater;
         updater.Type = MediaPlaybackType.Music;
@@ -259,7 +300,8 @@ internal sealed class PlaybackEngine : IDisposable
         updater.MusicProperties.Artist = track.Uploader;
         updater.Thumbnail = null;
         updater.Update();
-        if (_pauseRequested) _player.Pause(); else _player.Play();
+        if (!play || _pauseRequested) _player.Pause();
+        else if (!_playAfterOpen) _player.Play();
         Changed?.Invoke();
         _ = ApplyThumbnailAsync(track);
     }
@@ -294,7 +336,8 @@ internal sealed class PlaybackEngine : IDisposable
         {
             var stream = await _client.GetPageAudioAsync(track, load.Token);
             if (load.IsCancellationRequested || !ReferenceEquals(load, _load) || Current != track) return;
-            _fallbackPosition = Position; _resumeAfterOpen = !_pauseRequested; _availableStream = stream;
+            _fallbackPosition = Position; _seekTarget = _fallbackPosition; _resumeAfterOpen = !_pauseRequested; _availableStream = stream;
+            _playAfterOpen = _resumeAfterOpen && _fallbackPosition > 0;
             SetSource(AudioQualityPreference.Choose(stream, PreferHiRes, _client.Account?.IsVip == true)); Changed?.Invoke();
         }
         catch (OperationCanceledException) when (load.IsCancellationRequested) { }
@@ -302,15 +345,38 @@ internal sealed class PlaybackEngine : IDisposable
     }
     private void SetSource(AudioStream stream)
     {
-        _stream = stream; _audio.SetSource(stream); if (_pauseRequested) _player.Pause(); else _player.Play();
+        _stream = stream; _audio.SetSource(stream);
+        if (_pauseRequested) _player.Pause();
+        else if (!_playAfterOpen) _player.Play();
     }
-    public void Pause() { _pauseRequested = true; _resumeAfterOpen = false; _player.Pause(); }
+    public void Pause() { _pauseRequested = true; _resumeAfterOpen = false; _playAfterOpen = false; _player.Pause(); }
     public void Toggle() { if (Current is null) return; if (Playing) Pause(); else Resume(); }
-    public void Resume() { _pauseRequested = false; _resumeAfterOpen = true; if (Current is not null) _player.Play(); }
+    public void Resume()
+    {
+        _pauseRequested = false; _resumeAfterOpen = true;
+        if (Current is null) return;
+        // If the decoder has not opened yet the pending seek must land before playback starts.
+        if (_seekTarget is not null) { _playAfterOpen = true; ApplyPendingSeek(); return; }
+        _playAfterOpen = false; _player.Play();
+    }
     public void Seek(double seconds)
     {
         if (Current is null || !double.IsFinite(seconds)) return;
-        _player.PlaybackSession.Position = TimeSpan.FromSeconds(Math.Clamp(seconds, 0, Math.Max(0, Duration)));
+        _seekTarget = Math.Max(0, seconds);
+        ApplyPendingSeek();
+    }
+    private void ApplyPendingSeek()
+    {
+        if (_seekTarget is not { } target || Duration <= 0) return;
+        target = Math.Clamp(target, 0, Duration); _seekTarget = target;
+        _fallbackPosition = 0;
+        if (Math.Abs(_player.PlaybackSession.Position.TotalSeconds - target) <= .05)
+        {
+            _seekTarget = null;
+            if (_playAfterOpen && !_pauseRequested) { _playAfterOpen = false; _player.Play(); }
+            return;
+        }
+        _player.PlaybackSession.Position = TimeSpan.FromSeconds(target);
     }
     public void UpdateTimeline()
     {
@@ -338,6 +404,7 @@ internal sealed class PlaybackEngine : IDisposable
         }
         else _proxy.Clear();
         _stream = null; _availableStream = null; Current = null;
+        _fallbackPosition = 0; _seekTarget = null; _playAfterOpen = false;
         PrepareSystemSession(null); Changed?.Invoke();
     }
     public void Dispose()

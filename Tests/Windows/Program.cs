@@ -50,8 +50,11 @@ var second = first with { Bvid="BV2xx411c7mD", Title="第二首", LocalFile=Path
 using(var store = new LocalStore(root))
 {
     store.SaveProgress(123,first,2);
+    Check(Math.Abs(store.GetProgress(123,first)-2)<1e-6,"播放进度没有写入");
+    Check(store.GetProgress(456,first)==0,"播放进度串号");
     store.RecordRecentPlays = false;
     store.SaveProgress(123,second,3);
+    Check(store.GetProgress(123,second)==0,"关闭记录后仍读取到播放进度");
     Check(store.History(123).SequenceEqual(new[]{first}),"关闭记录后仍记录了新歌曲");
     store.WriteTracks("queue:123",new[]{first,second});
     store.RememberSearch(123,"周杰伦"); store.RememberSearch(123,"陈奕迅"); store.RememberSearch(456,"周杰伦");
@@ -73,6 +76,8 @@ using(var reopened = new LocalStore(root))
     reopened.RecordRecentPlays = true;
     reopened.SaveProgress(123,second,4);
     Check(reopened.History(123).Count == 2,"重新开启最近播放后未记录");
+    Check(Math.Abs(reopened.GetProgress(123,second)-4)<1e-6,"重启后播放进度丢失");
+    Check(reopened.GetProgress(456,second)==0,"重启后播放进度串号");
     var queue = reopened.ReadTracks("queue:123");
     Check(queue.Count==2 && queue[0]==first && queue[1]==second,"重启后队列或顺序丢失");
     Check(reopened.ReadTracks("queue:456").Count==0,"队列串号");

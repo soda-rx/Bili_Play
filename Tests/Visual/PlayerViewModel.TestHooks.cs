@@ -10,6 +10,21 @@ public partial class PlayerViewModel
     internal Func<long,Folder,CancellationToken,Task>? FolderSelectionRemover { get; set; }
     internal Func<DownloadJob,Task>? BatchDownloadRunner { get; set; }
     internal Func<int,CancellationToken,Task<PageResult<Track>>>? HomeReader { get; set; }
+    internal void ExpireSleepTimerForTests() => ExpireSleepTimer();
+    internal double RestoreResumePositionForTests(Track track) => RestoreResumePosition(track);
+    internal Task PreloadCurrentForTestsAsync(Track track, double position) => PreloadSessionAsync(track, position);
+    internal void TickForTests() => Tick();
+    internal double ResumeExpectedForTests => _resumeExpected;
+    // Visual tests: force an empty home page without racing the asynchronous home loader.
+    internal void PrepareEmptyHomeForTests()
+    {
+        _hasLoadedHome = true;
+        _homeCache.Clear();
+        _homeMore = false;
+        _regionPage = 0;
+        Tracks.Clear();
+    }
+    internal void UpdateCurrentDisplayForTests(Track? track) => UpdateCurrentDisplay(track);
     internal Func<Track,CommentSort,int,CancellationToken,Task<CommentPage>>? CommentsReader { get; set; }
     internal Func<Track,string,long,long,CancellationToken,Task<BiliComment?>>? CommentReplySender { get; set; }
     internal Func<Track,string,CancellationToken,Task<BiliComment?>>? CommentSender { get; set; }

@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
@@ -51,9 +52,16 @@ public sealed class ImageDiskCache(string directory, HttpMessageHandler? handler
                     response.EnsureSuccessStatusCode();
                     if(response.Content.Headers.ContentLength>10*1024*1024) return null;
                     await using var input=await response.Content.ReadAsStreamAsync(limit.Token).ConfigureAwait(false);
-                    using var bytes=new MemoryStream();var buffer=new byte[16384];int count;
-                    while((count=await input.ReadAsync(buffer,limit.Token).ConfigureAwait(false))>0)
-                    { if(bytes.Length+count>10*1024*1024) return null; bytes.Write(buffer,0,count); }
+                    var capacity=response.Content.Headers.ContentLength is >0 and <=10*1024*1024 ? (int)response.Content.Headers.ContentLength : 0;
+                    using var bytes=capacity>0 ? new MemoryStream(capacity) : new MemoryStream();
+                    var buffer=ArrayPool<byte>.Shared.Rent(16384);
+                    try
+                    {
+                        int count;
+                        while((count=await input.ReadAsync(buffer.AsMemory(0,16384),limit.Token).ConfigureAwait(false))>0)
+                        { if(bytes.Length+count>10*1024*1024) return null; bytes.Write(buffer,0,count); }
+                    }
+                    finally { ArrayPool<byte>.Shared.Return(buffer); }
                     var data=bytes.ToArray();
                     if(data.Length<12 || !(data[0]==0xff&&data[1]==0xd8 || data[0]==137&&data[1]==80 || Encoding.ASCII.GetString(data,0,3)=="GIF" || Encoding.ASCII.GetString(data,0,4)=="RIFF" || data[0]==66&&data[1]==77)) return null;
                     await _disk.WaitAsync(limit.Token).ConfigureAwait(false);
